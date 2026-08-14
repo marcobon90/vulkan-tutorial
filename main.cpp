@@ -10,6 +10,7 @@
 #include <fstream>
 #include <glm/ext/vector_float2.hpp>
 #include <glm/ext/vector_float3.hpp>
+#include <glm/fwd.hpp>
 #include <glm/glm.hpp>
 #include <ios>
 #include <iostream>
@@ -77,9 +78,12 @@ struct Vertex {
   }
 };
 
-const std::vector<Vertex> vertices = {{{0.0f, -0.5f}, {1.0f, 1.0f, 1.0f}},
-                                      {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
-                                      {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}};
+const std::vector<Vertex> vertices = {{{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+                                      {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
+                                      {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
+                                      {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}};
+
+const std::vector<uint16_t> indices = {0, 1, 2, 2, 3, 0};
 
 class HelloTriangleApplication {
 public:
@@ -115,6 +119,8 @@ private:
   vk::raii::CommandPool command_pool = nullptr;
   vk::raii::Buffer vertex_buffer = nullptr;
   vk::raii::DeviceMemory vertex_buffer_memory = nullptr;
+  vk::raii::Buffer index_buffer = nullptr;
+  vk::raii::DeviceMemory index_buffer_memory = nullptr;
   std::vector<vk::raii::CommandBuffer> command_buffers;
   std::vector<vk::raii::Semaphore> present_complete_semaphores;
   std::vector<vk::raii::Semaphore> render_finished_semaphores;
@@ -154,6 +160,7 @@ private:
     create_graphics_pipeline();
     create_command_pool();
     create_vertex_buffer();
+    create_index_buffer();
     create_command_buffers();
     create_sync_objects();
   }
@@ -727,6 +734,27 @@ private:
     copy_buffer(stagin_buffer, vertex_buffer, buffer_size);
   }
 
+  void create_index_buffer() {
+    vk::DeviceSize buffer_size = sizeof(indices[0]) * indices.size();
+
+    auto [stagin_buffer, stagin_buffer_memory] =
+        create_buffer(buffer_size, vk::BufferUsageFlagBits::eTransferSrc,
+                      vk::MemoryPropertyFlagBits::eHostVisible |
+                          vk::MemoryPropertyFlagBits::eHostCoherent);
+
+    void *data = stagin_buffer_memory.mapMemory(0, buffer_size);
+    memcpy(data, indices.data(), (size_t) buffer_size);
+    stagin_buffer_memory.unmapMemory();
+
+    std::tie(index_buffer, index_buffer_memory) =
+        create_buffer(buffer_size,
+                      vk::BufferUsageFlagBits::eIndexBuffer |
+                          vk::BufferUsageFlagBits::eTransferDst,
+                      vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+    copy_buffer(stagin_buffer, index_buffer, buffer_size);
+  }
+
   void copy_buffer(vk::raii::Buffer &src_buffer, vk::raii::Buffer &dst_buffer,
                    vk::DeviceSize size) {
     auto alloc_info = vk::CommandBufferAllocateInfo()
@@ -797,14 +825,15 @@ private:
     command_buffers[frame_index].bindPipeline(vk::PipelineBindPoint::eGraphics,
                                               *graphics_pipeline);
     command_buffers[frame_index].bindVertexBuffers(0, *vertex_buffer, {0});
+    command_buffers[frame_index].bindIndexBuffer(*index_buffer, 0, vk::IndexType::eUint16);
     command_buffers[frame_index].setViewport(
         0,
         vk::Viewport(0.0f, 0.0f, static_cast<float>(swap_chain_extent.width),
                      static_cast<float>(swap_chain_extent.height), 0.0f, 1.0f));
     command_buffers[frame_index].setScissor(
         0, vk::Rect2D(vk::Offset2D(0, 0), swap_chain_extent));
-    command_buffers[frame_index].draw(static_cast<uint32_t>(vertices.size()), 1,
-                                      0, 0);
+    command_buffers[frame_index].drawIndexed(static_cast<uint32_t>(indices.size()), 1,
+                                      0, 0,0);
     command_buffers[frame_index].endRendering();
 
     transition_image_layour(image_index,
