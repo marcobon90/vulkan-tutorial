@@ -1,11 +1,16 @@
 #include "vulkan/vulkan.hpp"
 #include <algorithm>
+#include <array>
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <glm/ext/vector_float2.hpp>
+#include <glm/ext/vector_float3.hpp>
+#include <glm/glm.hpp>
 #include <ios>
 #include <iostream>
 #include <limits>
@@ -42,6 +47,38 @@ constexpr bool enable_validation_layers = true;
 #endif
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
+struct Vertex {
+  glm::vec2 pos;
+  glm::vec3 color;
+
+  static vk::VertexInputBindingDescription get_binding_description() {
+    return vk::VertexInputBindingDescription()
+        .setBinding(0)
+        .setStride(sizeof(Vertex))
+        .setInputRate(vk::VertexInputRate::eVertex);
+  }
+
+  static std::array<vk::VertexInputAttributeDescription, 2>
+  get_attribute_descriptio() {
+    return {
+        vk::VertexInputAttributeDescription()
+            .setLocation(0)
+            .setBinding(0)
+            .setFormat(vk::Format::eR32G32Sfloat)
+            .setOffset(offsetof(Vertex, pos)),
+        vk::VertexInputAttributeDescription()
+            .setLocation(1)
+            .setBinding(0)
+            .setFormat(vk::Format::eR32G32B32Sfloat)
+            .setOffset(offsetof(Vertex, color)),
+    };
+  }
+};
+
+const std::vector<Vertex> vertices = {{{0.0f, -0.5f}, {1.0f, 1.0f, 1.0f}},
+                                      {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
+                                      {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}};
+
 class HelloTriangleApplication {
 public:
   void run() {
@@ -74,6 +111,8 @@ private:
   vk::raii::PipelineLayout pipeline_layout = nullptr;
   vk::raii::Pipeline graphics_pipeline = nullptr;
   vk::raii::CommandPool command_pool = nullptr;
+  vk::raii::Buffer vertex_buffer = nullptr;
+  vk::raii::DeviceMemory vertex_buffer_memory = nullptr;
   std::vector<vk::raii::CommandBuffer> command_buffers;
   std::vector<vk::raii::Semaphore> present_complete_semaphores;
   std::vector<vk::raii::Semaphore> render_finished_semaphores;
@@ -95,9 +134,11 @@ private:
     glfwSetFramebufferSizeCallback(window, framebuffer_resize_callback);
   }
 
-  static void framebuffer_resize_callback(GLFWwindow *window, int width, int height) {
-      auto app = reinterpret_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
-      app->framebuffer_resized = true;
+  static void framebuffer_resize_callback(GLFWwindow *window, int width,
+                                          int height) {
+    auto app = reinterpret_cast<HelloTriangleApplication *>(
+        glfwGetWindowUserPointer(window));
+    app->framebuffer_resized = true;
   }
 
   void init_vulkan() {
@@ -110,6 +151,7 @@ private:
     create_image_views();
     create_graphics_pipeline();
     create_command_pool();
+    create_vertex_buffer();
     create_command_buffers();
     create_sync_objects();
   }
@@ -124,7 +166,8 @@ private:
   }
 
   void draw_frame() {
-    auto fence_result = device.waitForFences(*in_flight_fences[frame_index], vk::True, UINT64_MAX);
+    auto fence_result = device.waitForFences(*in_flight_fences[frame_index],
+                                             vk::True, UINT64_MAX);
     if (fence_result != vk::Result::eSuccess)
       throw std::runtime_error("failed to wait for fence!");
 
@@ -132,12 +175,13 @@ private:
         UINT64_MAX, *present_complete_semaphores[frame_index], nullptr);
 
     if (result == vk::Result::eErrorOutOfDateKHR) {
-        recreate_swap_chain();
-        return;
+      recreate_swap_chain();
+      return;
     }
-    if(result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR) {
-        assert(result == vk::Result::eTimeout || result == vk::Result::eNotReady);
-        throw std::runtime_error("failed to acquire swap chain image");
+    if (result != vk::Result::eSuccess &&
+        result != vk::Result::eSuboptimalKHR) {
+      assert(result == vk::Result::eTimeout || result == vk::Result::eNotReady);
+      throw std::runtime_error("failed to acquire swap chain image");
     }
     device.resetFences(*in_flight_fences[frame_index]);
 
@@ -184,11 +228,12 @@ private:
 
     result = queue.presentKHR(present_info_khr);
 
-    if((result == vk::Result::eSuboptimalKHR) || (result == vk::Result::eErrorOutOfDateKHR)) {
-        framebuffer_resized = false;
-        recreate_swap_chain();
+    if ((result == vk::Result::eSuboptimalKHR) ||
+        (result == vk::Result::eErrorOutOfDateKHR)) {
+      framebuffer_resized = false;
+      recreate_swap_chain();
     } else {
-        assert(result == vk::Result::eSuccess);
+      assert(result == vk::Result::eSuccess);
     }
     frame_index = (frame_index + 1) % MAX_FRAMES_IN_FLIGHT;
   }
@@ -196,38 +241,42 @@ private:
     assert(present_complete_semaphores.empty() &&
            render_finished_semaphores.empty() && in_flight_fences.empty());
     for (int i = 0; i < swap_chain_images.size(); i++) {
-      render_finished_semaphores.emplace_back(device, vk::SemaphoreCreateInfo());
+      render_finished_semaphores.emplace_back(device,
+                                              vk::SemaphoreCreateInfo());
     }
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-      present_complete_semaphores.emplace_back(device, vk::SemaphoreCreateInfo());
-      in_flight_fences.emplace_back(device, vk::FenceCreateInfo().setFlags(vk::FenceCreateFlagBits::eSignaled));
+      present_complete_semaphores.emplace_back(device,
+                                               vk::SemaphoreCreateInfo());
+      in_flight_fences.emplace_back(
+          device,
+          vk::FenceCreateInfo().setFlags(vk::FenceCreateFlagBits::eSignaled));
     }
   }
 
   void cleanup() {
-      cleanup_swapchain();
-      glfwDestroyWindow(window);
+    cleanup_swapchain();
+    glfwDestroyWindow(window);
 
-      glfwTerminate();
+    glfwTerminate();
   }
 
   void cleanup_swapchain() {
-      swap_chain.clear();
-      swap_chain = nullptr;
+    swap_chain.clear();
+    swap_chain = nullptr;
   }
 
   void recreate_swap_chain() {
-      int width = 0, height = 0;
+    int width = 0, height = 0;
+    glfwGetFramebufferSize(window, &width, &height);
+    while (width == 0 || height == 0) {
       glfwGetFramebufferSize(window, &width, &height);
-      while (width == 0 || height == 0) {
-          glfwGetFramebufferSize(window, &width, &height);
-          glfwWaitEvents();
-      }
-      device.waitIdle();
+      glfwWaitEvents();
+    }
+    device.waitIdle();
 
-      cleanup_swapchain();
-      create_swap_chain();
-      create_image_views();
+    cleanup_swapchain();
+    create_swap_chain();
+    create_image_views();
   }
 
   void create_instance() {
@@ -516,7 +565,16 @@ private:
 
     vk::PipelineShaderStageCreateInfo shader_stages[] = {
         vet_shader_stage_info, vet_fragment_stage_info};
-    vk::PipelineVertexInputStateCreateInfo vertex_input_info;
+
+    auto binding_description = Vertex::get_binding_description();
+    auto attribute_description = Vertex::get_attribute_descriptio();
+    auto vertex_input_info =
+        vk::PipelineVertexInputStateCreateInfo()
+            .setVertexBindingDescriptionCount(1)
+            .setPVertexBindingDescriptions(&binding_description)
+            .setVertexAttributeDescriptionCount(
+                static_cast<uint32_t>(attribute_description.size()))
+            .setPVertexAttributeDescriptions(attribute_description.data());
     auto input_assembly =
         vk::PipelineInputAssemblyStateCreateInfo().setTopology(
             vk::PrimitiveTopology::eTriangleList);
@@ -620,6 +678,44 @@ private:
             .setQueueFamilyIndex(queue_index);
     command_pool = vk::raii::CommandPool(device, pool_info);
   }
+
+  void create_vertex_buffer() {
+    auto buffer_info = vk::BufferCreateInfo()
+                           .setSize(sizeof(vertices[0]) * vertices.size())
+                           .setUsage(vk::BufferUsageFlagBits::eVertexBuffer)
+                           .setSharingMode(vk::SharingMode::eExclusive);
+
+    vertex_buffer = vk::raii::Buffer(device, buffer_info);
+
+    auto mem_requirements = vertex_buffer.getMemoryRequirements();
+    auto mem_allocate_info =
+        vk::MemoryAllocateInfo()
+            .setAllocationSize(mem_requirements.size)
+            .setMemoryTypeIndex(find_memory_type(
+                mem_requirements.memoryTypeBits,
+                vk::MemoryPropertyFlagBits::eHostVisible |
+                    vk::MemoryPropertyFlagBits::eHostCoherent));
+
+    vertex_buffer_memory = vk::raii::DeviceMemory(device,mem_allocate_info);
+    vertex_buffer.bindMemory(*vertex_buffer_memory, 0);
+
+    void *data = vertex_buffer_memory.mapMemory(0, buffer_info.size);
+    memcpy(data, vertices.data(), buffer_info.size);
+    vertex_buffer_memory.unmapMemory();
+  }
+
+  uint32_t find_memory_type(uint32_t type_filter,
+                            vk::MemoryPropertyFlags properties) {
+    auto mem_properties = physical_device.getMemoryProperties();
+    for (uint32_t i = 0; i < mem_properties.memoryTypeCount; i++) {
+      if ((type_filter & (1 << i)) &&
+          (mem_properties.memoryTypes[i].propertyFlags & properties) ==
+              properties) {
+        return i;
+      }
+    }
+    throw std::runtime_error("failed to find suitable memory type!");
+  }
   void create_command_buffers() {
     auto alloc_info = vk::CommandBufferAllocateInfo()
                           .setCommandPool(command_pool)
@@ -657,14 +753,15 @@ private:
 
     command_buffers[frame_index].beginRendering(rendering_info);
     command_buffers[frame_index].bindPipeline(vk::PipelineBindPoint::eGraphics,
-                                *graphics_pipeline);
+                                              *graphics_pipeline);
+    command_buffers[frame_index].bindVertexBuffers(0, *vertex_buffer, {0});
     command_buffers[frame_index].setViewport(
         0,
         vk::Viewport(0.0f, 0.0f, static_cast<float>(swap_chain_extent.width),
                      static_cast<float>(swap_chain_extent.height), 0.0f, 1.0f));
     command_buffers[frame_index].setScissor(
         0, vk::Rect2D(vk::Offset2D(0, 0), swap_chain_extent));
-    command_buffers[frame_index].draw(3, 1, 0, 0);
+    command_buffers[frame_index].draw(static_cast<uint32_t>(vertices.size()), 1, 0, 0);
     command_buffers[frame_index].endRendering();
 
     transition_image_layour(image_index,
