@@ -16,6 +16,8 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <tuple>
+#include <utility>
 #include <vector>
 #include <vulkan/vk_platform.h>
 #include <vulkan/vulkan_core.h>
@@ -679,15 +681,17 @@ private:
     command_pool = vk::raii::CommandPool(device, pool_info);
   }
 
-  void create_vertex_buffer() {
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory>
+  create_buffer(vk::DeviceSize size, vk::BufferUsageFlags usage,
+                vk::MemoryPropertyFlags properties) {
     auto buffer_info = vk::BufferCreateInfo()
                            .setSize(sizeof(vertices[0]) * vertices.size())
                            .setUsage(vk::BufferUsageFlagBits::eVertexBuffer)
                            .setSharingMode(vk::SharingMode::eExclusive);
 
-    vertex_buffer = vk::raii::Buffer(device, buffer_info);
+    auto buffer = vk::raii::Buffer(device, buffer_info);
 
-    auto mem_requirements = vertex_buffer.getMemoryRequirements();
+    auto mem_requirements = buffer.getMemoryRequirements();
     auto mem_allocate_info =
         vk::MemoryAllocateInfo()
             .setAllocationSize(mem_requirements.size)
@@ -696,14 +700,52 @@ private:
                 vk::MemoryPropertyFlagBits::eHostVisible |
                     vk::MemoryPropertyFlagBits::eHostCoherent));
 
-    vertex_buffer_memory = vk::raii::DeviceMemory(device,mem_allocate_info);
-    vertex_buffer.bindMemory(*vertex_buffer_memory, 0);
+    auto device_memory = vk::raii::DeviceMemory(device, mem_allocate_info);
+    buffer.bindMemory(*device_memory, 0);
 
-    void *data = vertex_buffer_memory.mapMemory(0, buffer_info.size);
-    memcpy(data, vertices.data(), buffer_info.size);
-    vertex_buffer_memory.unmapMemory();
+    return {std::move(buffer), std::move(device_memory)};
   }
 
+  void create_vertex_buffer() {
+    vk::DeviceSize buffer_size = sizeof(vertices[0]) * vertices.size();
+
+    auto [stagin_buffer, stagin_buffer_memory] =
+        create_buffer(buffer_size, vk::BufferUsageFlagBits::eTransferSrc,
+                      vk::MemoryPropertyFlagBits::eHostVisible |
+                          vk::MemoryPropertyFlagBits::eHostCoherent);
+
+    void *data_stagin = stagin_buffer_memory.mapMemory(0, buffer_size);
+    memcpy(data_stagin, vertices.data(), buffer_size);
+    stagin_buffer_memory.unmapMemory();
+
+    std::tie(vertex_buffer, vertex_buffer_memory) =
+        create_buffer(buffer_size,
+                      vk::BufferUsageFlagBits::eVertexBuffer |
+                          vk::BufferUsageFlagBits::eTransferDst,
+                      vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+    copy_buffer(stagin_buffer, vertex_buffer, buffer_size);
+  }
+
+  void copy_buffer(vk::raii::Buffer &src_buffer, vk::raii::Buffer &dst_buffer,
+                   vk::DeviceSize size) {
+    auto alloc_info = vk::CommandBufferAllocateInfo()
+                          .setCommandPool(command_pool)
+                          .setLevel(vk::CommandBufferLevel::ePrimary)
+                          .setCommandBufferCount(1);
+
+    vk::raii::CommandBuffer command_copy_buffer =
+        std::move(device.allocateCommandBuffers(alloc_info).front());
+    command_copy_buffer.begin(vk::CommandBufferBeginInfo().setFlags(
+        vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
+    command_copy_buffer.copyBuffer(src_buffer, dst_buffer,
+                                   vk::BufferCopy(0, 0, size));
+    command_copy_buffer.end();
+
+    queue.submit(vk::SubmitInfo().setCommandBufferCount(1).setPCommandBuffers(
+        &*command_copy_buffer));
+    queue.waitIdle();
+  }
   uint32_t find_memory_type(uint32_t type_filter,
                             vk::MemoryPropertyFlags properties) {
     auto mem_properties = physical_device.getMemoryProperties();
@@ -761,7 +803,8 @@ private:
                      static_cast<float>(swap_chain_extent.height), 0.0f, 1.0f));
     command_buffers[frame_index].setScissor(
         0, vk::Rect2D(vk::Offset2D(0, 0), swap_chain_extent));
-    command_buffers[frame_index].draw(static_cast<uint32_t>(vertices.size()), 1, 0, 0);
+    command_buffers[frame_index].draw(static_cast<uint32_t>(vertices.size()), 1,
+                                      0, 0);
     command_buffers[frame_index].endRendering();
 
     transition_image_layour(image_index,
