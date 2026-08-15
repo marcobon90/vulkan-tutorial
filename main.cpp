@@ -2,16 +2,21 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <glm/ext/matrix_clip_space.hpp>
+#include <glm/ext/matrix_transform.hpp>
 #include <glm/ext/vector_float2.hpp>
 #include <glm/ext/vector_float3.hpp>
 #include <glm/fwd.hpp>
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/trigonometric.hpp>
 #include <ios>
 #include <iostream>
 #include <limits>
@@ -49,6 +54,12 @@ constexpr bool enable_validation_layers = false;
 constexpr bool enable_validation_layers = true;
 #endif
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
+
+struct UniformBufferObject {
+  glm::mat4 model;
+  glm::mat4 view;
+  glm::mat4 proj;
+};
 
 struct Vertex {
   glm::vec2 pos;
@@ -114,6 +125,7 @@ private:
   vk::SurfaceFormatKHR swap_chain_surface_format;
   vk::Extent2D swap_chain_extent;
   std::vector<vk::raii::ImageView> swap_chain_image_views;
+  vk::raii::DescriptorSetLayout descriptor_set_layout = nullptr;
   vk::raii::PipelineLayout pipeline_layout = nullptr;
   vk::raii::Pipeline graphics_pipeline = nullptr;
   vk::raii::CommandPool command_pool = nullptr;
@@ -121,6 +133,11 @@ private:
   vk::raii::DeviceMemory vertex_buffer_memory = nullptr;
   vk::raii::Buffer index_buffer = nullptr;
   vk::raii::DeviceMemory index_buffer_memory = nullptr;
+  vk::raii::DescriptorPool descriptor_pool = nullptr;
+  std::vector<vk::raii::DescriptorSet> descriptor_sets;
+  std::vector<vk::raii::Buffer> uniform_buffers;
+  std::vector<vk::raii::DeviceMemory> uniform_buffers_memory;
+  std::vector<void *> uniform_buffers_mapped;
   std::vector<vk::raii::CommandBuffer> command_buffers;
   std::vector<vk::raii::Semaphore> present_complete_semaphores;
   std::vector<vk::raii::Semaphore> render_finished_semaphores;
@@ -157,10 +174,14 @@ private:
     create_logical_device();
     create_swap_chain();
     create_image_views();
+    create_descriptor_set_layout();
     create_graphics_pipeline();
     create_command_pool();
     create_vertex_buffer();
     create_index_buffer();
+    create_uniform_buffers();
+    create_description_pool();
+    create_description_sets();
     create_command_buffers();
     create_sync_objects();
   }
@@ -199,6 +220,8 @@ private:
 
     vk::PipelineStageFlags wait_destination_stage_mask(
         vk::PipelineStageFlagBits::eColorAttachmentOutput);
+
+    update_uniform_buffer(frame_index);
 
     const auto submit_info =
         vk::SubmitInfo()
@@ -246,6 +269,31 @@ private:
     }
     frame_index = (frame_index + 1) % MAX_FRAMES_IN_FLIGHT;
   }
+
+  void update_uniform_buffer(uint32_t current_image) {
+    static auto start_time = std::chrono::high_resolution_clock().now();
+
+    auto current_time = std::chrono::high_resolution_clock().now();
+    float time = std::chrono::duration<float, std::chrono::seconds::period>(
+                     current_time - start_time)
+                     .count();
+
+    UniformBufferObject ubo{};
+    ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f),
+                            glm::vec3(0.0f, 0.0f, 1.0f));
+    ubo.view =
+        glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f),
+                    glm::vec3(0.0f, 0.0f, 1.0f));
+    ubo.proj =
+        glm::perspective(glm::radians(45.0f),
+                         static_cast<float>(swap_chain_extent.width) /
+                             static_cast<float>(swap_chain_extent.height),
+                         0.1f, 10.0f);
+    ubo.proj[1][1] *= -1;
+
+    memcpy(uniform_buffers_mapped[current_image], &ubo, sizeof(ubo));
+  }
+
   void create_sync_objects() {
     assert(present_complete_semaphores.empty() &&
            render_finished_semaphores.empty() && in_flight_fences.empty());
@@ -560,6 +608,25 @@ private:
     }
   }
 
+  void create_descriptor_set_layout() {
+    auto ubo_layout_binding =
+        vk::DescriptorSetLayoutBinding()
+            .setBinding(0)
+            .setDescriptorType(vk::DescriptorType::eUniformBuffer)
+            .setDescriptorCount(1)
+            .setStageFlags(vk::ShaderStageFlagBits::eVertex);
+    auto layout_info =
+        vk::DescriptorSetLayoutCreateInfo().setBindingCount(1).setPBindings(
+            &ubo_layout_binding);
+
+    descriptor_set_layout = vk::raii::DescriptorSetLayout(device, layout_info);
+
+    auto pipeline_layout_info = vk::PipelineLayoutCreateInfo()
+                                    .setSetLayoutCount(1)
+                                    .setPSetLayouts(&*descriptor_set_layout)
+                                    .setPushConstantRangeCount(0);
+  }
+
   void create_graphics_pipeline() {
     auto shader_module = create_shader_module(read_file("shaders/slang.spv"));
     auto vet_shader_stage_info = vk::PipelineShaderStageCreateInfo()
@@ -615,7 +682,7 @@ private:
                           .setRasterizerDiscardEnable(vk::False)
                           .setPolygonMode(vk::PolygonMode::eFill)
                           .setCullMode(vk::CullModeFlagBits::eBack)
-                          .setFrontFace(vk::FrontFace::eClockwise)
+                          .setFrontFace(vk::FrontFace::eCounterClockwise)
                           .setDepthBiasEnable(vk::False)
                           .setLineWidth(1.0f);
 
@@ -644,16 +711,17 @@ private:
                               .setAttachmentCount(1)
                               .setPAttachments(&color_blend_attachment);
 
-    auto pipeline_layout_info = vk::PipelineLayoutCreateInfo();
-    pipeline_layout_info.setLayoutCount = 0;
-    pipeline_layout_info.pushConstantRangeCount = 0;
+    auto pipeline_layout_info = vk::PipelineLayoutCreateInfo()
+                                    .setSetLayoutCount(1)
+                                    .setPSetLayouts(&*descriptor_set_layout)
+                                    .setPushConstantRangeCount(0);
 
     pipeline_layout = vk::raii::PipelineLayout(device, pipeline_layout_info);
 
-    auto pipeline_rendering_create_info =
-        vk::PipelineRenderingCreateInfo()
-            .setColorAttachmentCount(1)
-            .setPColorAttachmentFormats(&swap_chain_surface_format.format);
+    // auto pipeline_rendering_create_info =
+    //     vk::PipelineRenderingCreateInfo()
+    //         .setColorAttachmentCount(1)
+    //         .setPColorAttachmentFormats(&swap_chain_surface_format.format);
 
     auto pipeline_create_info_chain =
         vk::StructureChain<vk::GraphicsPipelineCreateInfo,
@@ -743,7 +811,7 @@ private:
                           vk::MemoryPropertyFlagBits::eHostCoherent);
 
     void *data = stagin_buffer_memory.mapMemory(0, buffer_size);
-    memcpy(data, indices.data(), (size_t) buffer_size);
+    memcpy(data, indices.data(), (size_t)buffer_size);
     stagin_buffer_memory.unmapMemory();
 
     std::tie(index_buffer, index_buffer_memory) =
@@ -786,6 +854,63 @@ private:
     }
     throw std::runtime_error("failed to find suitable memory type!");
   }
+
+  void create_uniform_buffers() {
+    for (int size = 0; size < MAX_FRAMES_IN_FLIGHT; size++) {
+      vk::DeviceSize buffer_size = sizeof(UniformBufferObject);
+      auto [buffer, buffer_memory] =
+          create_buffer(buffer_size, vk::BufferUsageFlagBits::eUniformBuffer,
+                        vk::MemoryPropertyFlagBits::eHostVisible |
+                            vk::MemoryPropertyFlagBits::eHostCoherent);
+      uniform_buffers.emplace_back(std::move(buffer));
+      uniform_buffers_memory.emplace_back(std::move(buffer_memory));
+      uniform_buffers_mapped.emplace_back(
+          uniform_buffers_memory.back().mapMemory(0, buffer_size));
+    }
+  }
+
+  void create_description_pool() {
+    auto pool_size = vk::DescriptorPoolSize()
+                         .setType(vk::DescriptorType::eUniformBuffer)
+                         .setDescriptorCount(MAX_FRAMES_IN_FLIGHT);
+    auto pool_info =
+        vk::DescriptorPoolCreateInfo()
+            .setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet)
+            .setMaxSets(MAX_FRAMES_IN_FLIGHT)
+            .setPoolSizeCount(1)
+            .setPPoolSizes(&pool_size);
+
+    descriptor_pool = vk::raii::DescriptorPool(device, pool_info);
+  }
+  void create_description_sets() {
+    std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT,
+                                                 *descriptor_set_layout);
+    auto alloc_info =
+        vk::DescriptorSetAllocateInfo()
+            .setDescriptorPool(descriptor_pool)
+            .setDescriptorSetCount(static_cast<uint32_t>(layouts.size()))
+            .setPSetLayouts(layouts.data());
+
+    descriptor_sets = device.allocateDescriptorSets(alloc_info);
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+      auto buffer_info = vk::DescriptorBufferInfo()
+                             .setBuffer(uniform_buffers[i])
+                             .setOffset(0)
+                             .setRange(sizeof(UniformBufferObject));
+      auto descriptor_write =
+          vk::WriteDescriptorSet()
+              .setDstSet(descriptor_sets[i])
+              .setDstArrayElement(0)
+              .setDstBinding(0)
+              .setDescriptorCount(1)
+              .setDescriptorType(vk::DescriptorType::eUniformBuffer)
+              .setPBufferInfo(&buffer_info);
+
+      device.updateDescriptorSets(descriptor_write, {});
+    }
+  }
+
   void create_command_buffers() {
     auto alloc_info = vk::CommandBufferAllocateInfo()
                           .setCommandPool(command_pool)
@@ -795,7 +920,8 @@ private:
   }
 
   void record_command_buffer(uint32_t image_index) {
-    command_buffers[frame_index].begin({});
+    auto &command_buffer = command_buffers[frame_index];
+    command_buffer.begin({});
 
     transition_image_layour(image_index, vk::ImageLayout::eUndefined,
                             vk::ImageLayout::eColorAttachmentOptimal, {},
@@ -821,20 +947,23 @@ private:
             .setColorAttachmentCount(1)
             .setPColorAttachments(&attachment_info);
 
-    command_buffers[frame_index].beginRendering(rendering_info);
-    command_buffers[frame_index].bindPipeline(vk::PipelineBindPoint::eGraphics,
-                                              *graphics_pipeline);
-    command_buffers[frame_index].bindVertexBuffers(0, *vertex_buffer, {0});
-    command_buffers[frame_index].bindIndexBuffer(*index_buffer, 0, vk::IndexType::eUint16);
-    command_buffers[frame_index].setViewport(
+    command_buffer.beginRendering(rendering_info);
+    command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics,
+                                *graphics_pipeline);
+    command_buffer.bindVertexBuffers(0, *vertex_buffer, {0});
+    command_buffer.bindIndexBuffer(*index_buffer, 0, vk::IndexType::eUint16);
+    command_buffer.setViewport(
         0,
         vk::Viewport(0.0f, 0.0f, static_cast<float>(swap_chain_extent.width),
                      static_cast<float>(swap_chain_extent.height), 0.0f, 1.0f));
-    command_buffers[frame_index].setScissor(
+    command_buffer.setScissor(
         0, vk::Rect2D(vk::Offset2D(0, 0), swap_chain_extent));
-    command_buffers[frame_index].drawIndexed(static_cast<uint32_t>(indices.size()), 1,
-                                      0, 0,0);
-    command_buffers[frame_index].endRendering();
+    command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                      pipeline_layout, 0,
+                                      *descriptor_sets[frame_index], nullptr);
+    command_buffer.drawIndexed(static_cast<uint32_t>(indices.size()), 1, 0, 0,
+                               0);
+    command_buffer.endRendering();
 
     transition_image_layour(image_index,
                             vk::ImageLayout::eColorAttachmentOptimal,
@@ -843,7 +972,7 @@ private:
                             vk::PipelineStageFlagBits2::eColorAttachmentOutput,
                             vk::PipelineStageFlagBits2::eBottomOfPipe);
 
-    command_buffers[frame_index].end();
+    command_buffer.end();
   }
 
   void transition_image_layour(uint32_t image_index, vk::ImageLayout old_layout,
