@@ -14,6 +14,7 @@
 #include <glm/ext/vector_float2.hpp>
 #include <glm/ext/vector_float3.hpp>
 #include <glm/fwd.hpp>
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/trigonometric.hpp>
@@ -64,7 +65,7 @@ struct UniformBufferObject {
 };
 
 struct Vertex {
-  glm::vec2 pos;
+  glm::vec3 pos;
   glm::vec3 color;
   glm::vec2 text_coord;
 
@@ -81,7 +82,7 @@ struct Vertex {
         vk::VertexInputAttributeDescription()
             .setLocation(0)
             .setBinding(0)
-            .setFormat(vk::Format::eR32G32Sfloat)
+            .setFormat(vk::Format::eR32G32B32Sfloat)
             .setOffset(offsetof(Vertex, pos)),
         vk::VertexInputAttributeDescription()
             .setLocation(1)
@@ -92,17 +93,22 @@ struct Vertex {
             .setLocation(2)
             .setBinding(0)
             .setFormat(vk::Format::eR32G32Sfloat)
-            .setOffset(offsetof(Vertex,text_coord)),
+            .setOffset(offsetof(Vertex, text_coord)),
     };
   }
 };
 
-const std::vector<Vertex> vertices = {{{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f,0.0f}},
-                                      {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f},{0.0f,0.0f}},
-                                      {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f},{0.0f,1.0f}},
-                                      {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f},{1.0f,1.0f}}};
+const std::vector<Vertex> vertices = {
+    {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+    {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+    {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+    {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
+    {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+    {{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+    {{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+    {{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}};
 
-const std::vector<uint16_t> indices = {0, 1, 2, 2, 3, 0};
+const std::vector<uint16_t> indices = {0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4};
 
 class HelloTriangleApplication {
 public:
@@ -145,6 +151,9 @@ private:
   vk::raii::Image texture_image = nullptr;
   vk::raii::DeviceMemory texture_image_memory = nullptr;
   vk::raii::ImageView texture_image_view = nullptr;
+  vk::raii::Image depth_image = nullptr;
+  vk::raii::DeviceMemory depth_image_memory = nullptr;
+  vk::raii::ImageView depth_image_view = nullptr;
   vk::raii::Sampler texture_sampler = nullptr;
   std::vector<vk::raii::DescriptorSet> descriptor_sets;
   std::vector<vk::raii::Buffer> uniform_buffers;
@@ -189,6 +198,7 @@ private:
     create_descriptor_set_layout();
     create_graphics_pipeline();
     create_command_pool();
+    create_depth_resources();
     create_texture_image();
     create_texture_image_view();
     create_texture_sampler();
@@ -349,6 +359,7 @@ private:
     cleanup_swapchain();
     create_swap_chain();
     create_image_views();
+    create_depth_resources();
   }
 
   void create_instance() {
@@ -612,7 +623,8 @@ private:
     swap_chain_image_views.reserve(swap_chain_images.size());
     for (auto &image : swap_chain_images) {
       swap_chain_image_views.emplace_back(
-          create_image_view(image, swap_chain_surface_format.format));
+          create_image_view(image, swap_chain_surface_format.format,
+                            vk::ImageAspectFlagBits::eColor));
     }
   }
 
@@ -732,12 +744,21 @@ private:
     //         .setColorAttachmentCount(1)
     //         .setPColorAttachmentFormats(&swap_chain_surface_format.format);
 
+    auto depth_stencil = vk::PipelineDepthStencilStateCreateInfo()
+                             .setDepthTestEnable(vk::True)
+                             .setDepthWriteEnable(vk::True)
+                             .setDepthCompareOp(vk::CompareOp::eLess)
+                             .setDepthBoundsTestEnable(vk::False)
+                             .setStencilTestEnable(vk::False);
+
+    auto depth_format = find_depth_format();
     auto pipeline_create_info_chain =
         vk::StructureChain<vk::GraphicsPipelineCreateInfo,
                            vk::PipelineRenderingCreateInfo>{
             vk::GraphicsPipelineCreateInfo()
                 .setStageCount(2)
                 .setPStages(shader_stages)
+                .setPDepthStencilState(&depth_stencil)
                 .setPVertexInputState(&vertex_input_info)
                 .setPInputAssemblyState(&input_assembly)
                 .setPViewportState(&view_port_state)
@@ -750,7 +771,8 @@ private:
 
             vk::PipelineRenderingCreateInfo()
                 .setColorAttachmentCount(1)
-                .setPColorAttachmentFormats(&swap_chain_surface_format.format)};
+                .setPColorAttachmentFormats(&swap_chain_surface_format.format)
+                .setDepthAttachmentFormat(depth_format)};
 
     graphics_pipeline = vk::raii::Pipeline(
         device, nullptr,
@@ -759,7 +781,7 @@ private:
 
   void create_texture_image() {
     int text_widht, text_height, text_channels;
-    //Load Torre Archirafi pixel art
+    // Load Torre Archirafi pixel art
     stbi_uc *pixels = stbi_load("textures/texture.png", &text_widht,
                                 &text_height, &text_channels, STBI_rgb_alpha);
 
@@ -788,13 +810,16 @@ private:
         vk::MemoryPropertyFlagBits::eDeviceLocal);
 
     vk::raii::CommandBuffer command_buffer = begin_single_time_commands();
-    transitionImageLayout(command_buffer, texture_image,
-                          vk::ImageLayout::eUndefined,
-                          vk::ImageLayout::eTransferDstOptimal);
-    copyBufferToImage(command_buffer, staging_buffer, texture_image, static_cast<uint32_t>(text_widht), static_cast<uint32_t>(text_height));
-    transitionImageLayout(command_buffer, texture_image,
-                          vk::ImageLayout::eTransferDstOptimal,
-                          vk::ImageLayout::eShaderReadOnlyOptimal);
+    transition_image_layout(
+        command_buffer, texture_image, vk::ImageLayout::eUndefined,
+        vk::ImageLayout::eTransferDstOptimal, vk::ImageAspectFlagBits::eColor);
+    copyBufferToImage(command_buffer, staging_buffer, texture_image,
+                      static_cast<uint32_t>(text_widht),
+                      static_cast<uint32_t>(text_height));
+    transition_image_layout(command_buffer, texture_image,
+                            vk::ImageLayout::eTransferDstOptimal,
+                            vk::ImageLayout::eShaderReadOnlyOptimal,
+                            vk::ImageAspectFlagBits::eDepth);
     end_single_time_commands(std::move(command_buffer));
   }
 
@@ -851,22 +876,23 @@ private:
 
   void create_texture_image_view() {
     texture_image_view =
-        create_image_view(texture_image, vk::Format::eR8G8B8A8Srgb);
+        create_image_view(texture_image, vk::Format::eR8G8B8A8Srgb,
+                          vk::ImageAspectFlagBits::eColor);
   }
 
   vk::raii::ImageView create_image_view(vk::Image const &image,
-                                        vk::Format format) {
+                                        vk::Format format,
+                                        vk::ImageAspectFlagBits aspect_mask) {
     auto view_info = vk::ImageViewCreateInfo()
                          .setFormat(format)
                          .setImage(image)
                          .setViewType(vk::ImageViewType::e2D)
-                         .setSubresourceRange(
-                             vk::ImageSubresourceRange()
-                                 .setAspectMask(vk::ImageAspectFlagBits::eColor)
-                                 .setBaseArrayLayer(0)
-                                 .setBaseMipLevel(0)
-                                 .setLayerCount(1)
-                                 .setLevelCount(1));
+                         .setSubresourceRange(vk::ImageSubresourceRange()
+                                                  .setAspectMask(aspect_mask)
+                                                  .setBaseArrayLayer(0)
+                                                  .setBaseMipLevel(0)
+                                                  .setLayerCount(1)
+                                                  .setLevelCount(1));
 
     return vk::raii::ImageView(device, view_info);
   }
@@ -878,6 +904,39 @@ private:
     command_pool = vk::raii::CommandPool(device, pool_info);
   }
 
+  void create_depth_resources() {
+    auto depth_format = find_depth_format();
+    std::tie(depth_image, depth_image_memory) =
+        create_image(swap_chain_extent.width, swap_chain_extent.height,
+                     depth_format, vk::ImageTiling::eOptimal,
+                     vk::ImageUsageFlagBits::eDepthStencilAttachment,
+                     vk::MemoryPropertyFlagBits::eDeviceLocal);
+    depth_image_view = create_image_view(depth_image, depth_format,
+                                         vk::ImageAspectFlagBits::eDepth);
+  }
+  // Available formats: eLinear || eOptimal
+  vk::Format findSupportedFormat(const std::vector<vk::Format> &candidates,
+                                 vk::ImageTiling tiling,
+                                 vk::FormatFeatureFlags features) {
+    for (const auto format : candidates) {
+      const auto props = physical_device.getFormatProperties(format);
+      if (((tiling == vk::ImageTiling::eLinear) &&
+           (props.linearTilingFeatures & features) == features) ||
+          (tiling == vk::ImageTiling::eOptimal) &&
+              (props.optimalTilingFeatures & features) == features) {
+        return format;
+      }
+    }
+    throw std::runtime_error("failed to find supported format!");
+  }
+
+  vk::Format find_depth_format() {
+    return findSupportedFormat(
+        {vk::Format::eD32Sfloat, vk::Format::eD32SfloatS8Uint,
+         vk::Format::eD24UnormS8Uint},
+        vk::ImageTiling::eOptimal,
+        vk::FormatFeatureFlagBits::eDepthStencilAttachment);
+  }
   std::pair<vk::raii::Buffer, vk::raii::DeviceMemory>
   create_buffer(vk::DeviceSize size, vk::BufferUsageFlags usage,
                 vk::MemoryPropertyFlags properties) {
@@ -969,21 +1028,22 @@ private:
     end_single_time_commands(std::move(command_buffer));
   }
 
-  void transitionImageLayout(vk::raii::CommandBuffer &command_buffer,
-                             const vk::raii::Image &image,
-                             vk::ImageLayout old_layout,
-                             vk::ImageLayout new_layout) {
-    auto barrier = vk::ImageMemoryBarrier()
-                       .setOldLayout(old_layout)
-                       .setImage(image)
-                       .setNewLayout(new_layout)
-                       .setSrcQueueFamilyIndex(vk::QueueFamilyIgnored)
-                       .setDstQueueFamilyIndex(vk::QueueFamilyIgnored)
-                       .setSubresourceRange(
-                           vk::ImageSubresourceRange()
-                               .setAspectMask(vk::ImageAspectFlagBits::eColor)
-                               .setLevelCount(1)
-                               .setLayerCount(1));
+  void transition_image_layout(vk::raii::CommandBuffer &command_buffer,
+                               const vk::raii::Image &image,
+                               vk::ImageLayout old_layout,
+                               vk::ImageLayout new_layout,
+                               vk::ImageAspectFlags image_aspect_mask) {
+    auto barrier =
+        vk::ImageMemoryBarrier()
+            .setOldLayout(old_layout)
+            .setImage(image)
+            .setNewLayout(new_layout)
+            .setSrcQueueFamilyIndex(vk::QueueFamilyIgnored)
+            .setDstQueueFamilyIndex(vk::QueueFamilyIgnored)
+            .setSubresourceRange(vk::ImageSubresourceRange()
+                                     .setAspectMask(image_aspect_mask)
+                                     .setLevelCount(1)
+                                     .setLayerCount(1));
 
     vk::PipelineStageFlags source_stage;
     vk::PipelineStageFlags destination_stage;
@@ -1056,14 +1116,13 @@ private:
   }
 
   void create_description_pool() {
-    std::array<vk::DescriptorPoolSize, 2> pool_size {
-      vk::DescriptorPoolSize()
-          .setType(vk::DescriptorType::eUniformBuffer)
-          .setDescriptorCount(MAX_FRAMES_IN_FLIGHT),
-          vk::DescriptorPoolSize()
-              .setType(vk::DescriptorType::eCombinedImageSampler)
-              .setDescriptorCount(MAX_FRAMES_IN_FLIGHT)
-    };
+    std::array<vk::DescriptorPoolSize, 2> pool_size{
+        vk::DescriptorPoolSize()
+            .setType(vk::DescriptorType::eUniformBuffer)
+            .setDescriptorCount(MAX_FRAMES_IN_FLIGHT),
+        vk::DescriptorPoolSize()
+            .setType(vk::DescriptorType::eCombinedImageSampler)
+            .setDescriptorCount(MAX_FRAMES_IN_FLIGHT)};
     auto pool_info =
         vk::DescriptorPoolCreateInfo()
             .setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet)
@@ -1109,8 +1168,7 @@ private:
               .setDstArrayElement(0)
               .setDescriptorCount(1)
               .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
-              .setPImageInfo(&image_info)
-      };
+              .setPImageInfo(&image_info)};
 
       device.updateDescriptorSets(descriptor_writes, {});
     }
@@ -1135,7 +1193,7 @@ private:
                             vk::PipelineStageFlagBits2::eColorAttachmentOutput);
 
     auto clear_color = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
-
+    auto clear_depth = vk::ClearDepthStencilValue(1.0f, 0);
     auto attachment_info =
         vk::RenderingAttachmentInfo()
             .setImageView(swap_chain_image_views[image_index])
@@ -1143,6 +1201,13 @@ private:
             .setLoadOp(vk::AttachmentLoadOp::eClear)
             .setStoreOp(vk::AttachmentStoreOp::eStore)
             .setClearValue(clear_color);
+    auto depth_attachment_info =
+        vk::RenderingAttachmentInfo()
+            .setImageView(depth_image_view)
+            .setImageLayout(vk::ImageLayout::eDepthAttachmentOptimal)
+            .setLoadOp(vk::AttachmentLoadOp::eClear)
+            .setStoreOp(vk::AttachmentStoreOp::eDontCare)
+            .setClearValue(clear_depth);
 
     auto rendering_info =
         vk::RenderingInfo()
@@ -1150,7 +1215,8 @@ private:
                 vk::Rect2D().setOffset({0, 0}).setExtent(swap_chain_extent))
             .setLayerCount(1)
             .setColorAttachmentCount(1)
-            .setPColorAttachments(&attachment_info);
+            .setPColorAttachments(&attachment_info)
+            .setPDepthAttachment(&depth_attachment_info);
 
     command_buffer.beginRendering(rendering_info);
     command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics,
