@@ -142,35 +142,49 @@ private:
   vk::raii::Instance instance = nullptr;
   vk::raii::SurfaceKHR surface = nullptr;
   vk::raii::DebugUtilsMessengerEXT debug_messenger = nullptr;
+
+  vk::raii::Device device = nullptr;
   vk::raii::PhysicalDevice physical_device = nullptr;
   vk::PhysicalDeviceFeatures physical_device_features;
-  vk::raii::Device device = nullptr;
+
   uint32_t queue_index = ~0;
   vk::raii::Queue queue = nullptr;
+
   vk::raii::SwapchainKHR swap_chain = nullptr;
   std::vector<vk::Image> swap_chain_images;
   vk::SurfaceFormatKHR swap_chain_surface_format;
   vk::Extent2D swap_chain_extent;
   std::vector<vk::raii::ImageView> swap_chain_image_views;
+
   vk::raii::DescriptorSetLayout descriptor_set_layout = nullptr;
   vk::raii::PipelineLayout pipeline_layout = nullptr;
   vk::raii::Pipeline graphics_pipeline = nullptr;
   vk::raii::CommandPool command_pool = nullptr;
+
   std::vector<Vertex> vertices;
   std::vector<uint32_t> indices;
+
   vk::raii::Buffer vertex_buffer = nullptr;
   vk::raii::DeviceMemory vertex_buffer_memory = nullptr;
   vk::raii::Buffer index_buffer = nullptr;
   vk::raii::DeviceMemory index_buffer_memory = nullptr;
   vk::raii::DescriptorPool descriptor_pool = nullptr;
   uint32_t mip_levels = 0;
+
   vk::raii::Image texture_image = nullptr;
   vk::raii::DeviceMemory texture_image_memory = nullptr;
   vk::raii::ImageView texture_image_view = nullptr;
+  vk::raii::Sampler texture_sampler = nullptr;
+
   vk::raii::Image depth_image = nullptr;
   vk::raii::DeviceMemory depth_image_memory = nullptr;
   vk::raii::ImageView depth_image_view = nullptr;
-  vk::raii::Sampler texture_sampler = nullptr;
+
+  vk::SampleCountFlagBits msaa_samples = vk::SampleCountFlagBits::e1;
+  vk::raii::Image color_image = nullptr;
+  vk::raii::DeviceMemory color_image_memory = nullptr;
+  vk::raii::ImageView color_image_view = nullptr;
+
   std::vector<vk::raii::DescriptorSet> descriptor_sets;
   std::vector<vk::raii::Buffer> uniform_buffers;
   std::vector<vk::raii::DeviceMemory> uniform_buffers_memory;
@@ -214,6 +228,7 @@ private:
     create_descriptor_set_layout();
     create_graphics_pipeline();
     create_command_pool();
+    create_color_resources();
     create_depth_resources();
     create_texture_image();
     create_texture_image_view();
@@ -374,6 +389,7 @@ private:
     cleanup_swapchain();
     create_swap_chain();
     create_image_views();
+    create_color_resources();
     create_depth_resources();
   }
 
@@ -512,8 +528,31 @@ private:
     if (dev_iter == physical_devices.end())
       throw std::runtime_error("Failed to find GPUs with Vulkan support!");
     physical_device = *dev_iter;
+
+    msaa_samples = get_max_usable_sample_count();
   }
 
+  vk::SampleCountFlagBits get_max_usable_sample_count() {
+    auto physical_device_props = physical_device.getProperties();
+
+    auto counts = physical_device_props.limits.framebufferColorSampleCounts &
+                  physical_device_props.limits.framebufferDepthSampleCounts;
+
+    if (counts & vk::SampleCountFlagBits::e64)
+      return vk::SampleCountFlagBits::e64;
+    if (counts & vk::SampleCountFlagBits::e32)
+      return vk::SampleCountFlagBits::e32;
+    if (counts & vk::SampleCountFlagBits::e16)
+      return vk::SampleCountFlagBits::e16;
+    if (counts & vk::SampleCountFlagBits::e8)
+      return vk::SampleCountFlagBits::e8;
+    if (counts & vk::SampleCountFlagBits::e4)
+      return vk::SampleCountFlagBits::e4;
+    if (counts & vk::SampleCountFlagBits::e2)
+      return vk::SampleCountFlagBits::e2;
+
+    return vk::SampleCountFlagBits::e1;
+  }
   void create_logical_device() {
     std::vector<vk::QueueFamilyProperties> queue_family_properties =
         physical_device.getQueueFamilyProperties();
@@ -537,7 +576,7 @@ private:
                            vk::PhysicalDeviceVulkan13Features,
                            vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>{
             vk::PhysicalDeviceFeatures2().setFeatures(
-                vk::PhysicalDeviceFeatures().setSamplerAnisotropy(true)),
+                vk::PhysicalDeviceFeatures().setSampleRateShading(vk::True).setSamplerAnisotropy(true)),
             vk::PhysicalDeviceVulkan13Features()
                 .setSynchronization2(true)
                 .setDynamicRendering(true),
@@ -722,10 +761,9 @@ private:
                           .setDepthBiasEnable(vk::False)
                           .setLineWidth(1.0f);
 
-    auto multisampling =
-        vk::PipelineMultisampleStateCreateInfo()
-            .setRasterizationSamples(vk::SampleCountFlagBits::e1)
-            .setSampleShadingEnable(vk::False);
+    auto multisampling = vk::PipelineMultisampleStateCreateInfo()
+                             .setRasterizationSamples(msaa_samples)
+                             .setSampleShadingEnable(vk::True).setMinSampleShading(0.2f);
 
     auto color_blend_attachment =
         vk::PipelineColorBlendAttachmentState()
@@ -822,13 +860,13 @@ private:
     // std::cout << "\taltezza: " << text_height << ",\n";
     stbi_image_free(pixels);
 
-    std::tie(texture_image, texture_image_memory) =
-        create_image(text_width, text_height, mip_levels,
-                     vk::Format::eR8G8B8A8Srgb, vk::ImageTiling::eOptimal,
-                     vk::ImageUsageFlagBits::eTransferSrc |
-                         vk::ImageUsageFlagBits::eTransferDst |
-                         vk::ImageUsageFlagBits::eSampled,
-                     vk::MemoryPropertyFlagBits::eDeviceLocal);
+    std::tie(texture_image, texture_image_memory) = create_image(
+        text_width, text_height, mip_levels, vk::SampleCountFlagBits::e1,
+        vk::Format::eR8G8B8A8Srgb, vk::ImageTiling::eOptimal,
+        vk::ImageUsageFlagBits::eTransferSrc |
+            vk::ImageUsageFlagBits::eTransferDst |
+            vk::ImageUsageFlagBits::eSampled,
+        vk::MemoryPropertyFlagBits::eDeviceLocal);
 
     vk::raii::CommandBuffer command_buffer = begin_single_time_commands();
     transition_image_layout(command_buffer, texture_image,
@@ -927,15 +965,16 @@ private:
 
   std::pair<vk::raii::Image, vk::raii::DeviceMemory>
   create_image(uint32_t width, uint32_t height, uint32_t mip_levels,
-               vk::Format format, vk::ImageTiling tiling,
-               vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties) {
+               vk::SampleCountFlagBits num_samples, vk::Format format,
+               vk::ImageTiling tiling, vk::ImageUsageFlags usage,
+               vk::MemoryPropertyFlags properties) {
     auto image_info = vk::ImageCreateInfo()
                           .setImageType(vk::ImageType::e2D)
                           .setFormat(format)
                           .setExtent({width, height, 1})
                           .setArrayLayers(1)
                           .setMipLevels(mip_levels)
-                          .setSamples(vk::SampleCountFlagBits::e1)
+                          .setSamples(num_samples)
                           .setTiling(tiling)
                           .setUsage(usage)
                           .setSharingMode(vk::SharingMode::eExclusive);
@@ -1007,11 +1046,24 @@ private:
     command_pool = vk::raii::CommandPool(device, pool_info);
   }
 
+  void create_color_resources() {
+    auto color_format = swap_chain_surface_format.format;
+
+    std::tie(color_image, color_image_memory) =
+        create_image(swap_chain_extent.width, swap_chain_extent.height, 1,
+                     msaa_samples, color_format, vk::ImageTiling::eOptimal,
+                     vk::ImageUsageFlagBits::eColorAttachment,
+                     vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+    color_image_view = create_image_view(color_image, color_format,
+                                         vk::ImageAspectFlagBits::eColor, 1);
+  }
+
   void create_depth_resources() {
     auto depth_format = find_depth_format();
     std::tie(depth_image, depth_image_memory) =
         create_image(swap_chain_extent.width, swap_chain_extent.height, 1,
-                     depth_format, vk::ImageTiling::eOptimal,
+                     msaa_samples, depth_format, vk::ImageTiling::eOptimal,
                      vk::ImageUsageFlagBits::eDepthStencilAttachment,
                      vk::MemoryPropertyFlagBits::eDeviceLocal);
     depth_image_view = create_image_view(depth_image, depth_format,
@@ -1352,12 +1404,23 @@ private:
                                 vk::PipelineStageFlagBits2::eLateFragmentTests,
                             vk::ImageAspectFlagBits::eDepth);
 
+    transition_image_layour(*color_image, vk::ImageLayout::eUndefined,
+                            vk::ImageLayout::eColorAttachmentOptimal,
+                            vk::AccessFlagBits2::eColorAttachmentWrite,
+                            vk::AccessFlagBits2::eColorAttachmentWrite,
+                            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                            vk::ImageAspectFlagBits::eColor);
+
     auto clear_color = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
     auto clear_depth = vk::ClearDepthStencilValue(1.0f, 0);
-    auto attachment_info =
+    auto color_attachment_info =
         vk::RenderingAttachmentInfo()
-            .setImageView(swap_chain_image_views[image_index])
+            .setImageView(color_image_view)
             .setImageLayout(vk::ImageLayout::eColorAttachmentOptimal)
+            .setResolveMode(vk::ResolveModeFlagBits::eAverage)
+            .setResolveImageView(swap_chain_image_views[image_index])
+            .setResolveImageLayout(vk::ImageLayout::eColorAttachmentOptimal)
             .setLoadOp(vk::AttachmentLoadOp::eClear)
             .setStoreOp(vk::AttachmentStoreOp::eStore)
             .setClearValue(clear_color);
@@ -1375,7 +1438,7 @@ private:
                 vk::Rect2D().setOffset({0, 0}).setExtent(swap_chain_extent))
             .setLayerCount(1)
             .setColorAttachmentCount(1)
-            .setPColorAttachments(&attachment_info)
+            .setPColorAttachments(&color_attachment_info)
             .setPDepthAttachment(&depth_attachment_info);
 
     command_buffer.beginRendering(rendering_info);
