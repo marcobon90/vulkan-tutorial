@@ -14,6 +14,7 @@
 #include <glm/ext/vector_float2.hpp>
 #include <glm/ext/vector_float3.hpp>
 #include <glm/fwd.hpp>
+#include <unordered_map>
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -63,6 +64,10 @@ constexpr bool enable_validation_layers = false;
 constexpr bool enable_validation_layers = true;
 #endif
 
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/hash.hpp>
+
+
 struct UniformBufferObject {
   glm::mat4 model;
   glm::mat4 view;
@@ -101,8 +106,23 @@ struct Vertex {
             .setOffset(offsetof(Vertex, text_coord)),
     };
   }
+
+  bool operator==(const Vertex& other) const
+  {
+      return pos == other.pos && color == other.color && text_coord == other.text_coord;
+  }
 };
 
+namespace std
+{
+    template<> struct hash<Vertex>
+    {
+        size_t operator()(Vertex const& vertex) const
+        {
+            return ((hash<glm::vec3>()(vertex.pos) ^ (hash<glm::vec3>()(vertex.color) << 1)) >> 1) ^ (hash<glm::vec2>()(vertex.text_coord) << 1);
+        }
+    };
+}
 class HelloTriangleApplication {
 public:
   void run() {
@@ -983,6 +1003,8 @@ private:
       throw std::runtime_error(warn + err);
     }
 
+    std::unordered_map<Vertex, uint32_t> unique_vertices;
+
     for (const auto &shape : shapes) {
       for (const auto &index : shape.mesh.indices) {
         Vertex vertex{};
@@ -1002,8 +1024,11 @@ private:
 
         vertex.color = {1.0f, 1.0f, 1.0f};
 
-        vertices.push_back(vertex);
-        indices.push_back(indices.size());
+        auto [it,inserted] = unique_vertices.insert({vertex,static_cast<uint32_t>(vertices.size())});
+        if (inserted) {
+            vertices.push_back(vertex);
+        }
+        indices.push_back(it->second);
       }
     }
   }
