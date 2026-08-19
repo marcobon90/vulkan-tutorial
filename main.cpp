@@ -45,8 +45,14 @@ import vulkan_hpp;
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb/stb_image.h"
 
+#define TINYOBJLOADER_IMPLEMENTATION
+#include <tiny_obj_loader.h>
+
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
+const std::string MODEL_PATH = "models/viking_room.obj";
+const std::string TEXTURE_PATH = "textures/viking_room.png";
+constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
 const std::vector<char const *> validation_layers = {
     "VK_LAYER_KHRONOS_validation"};
@@ -56,7 +62,6 @@ constexpr bool enable_validation_layers = false;
 #else
 constexpr bool enable_validation_layers = true;
 #endif
-constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
 struct UniformBufferObject {
   glm::mat4 model;
@@ -98,18 +103,6 @@ struct Vertex {
   }
 };
 
-const std::vector<Vertex> vertices = {
-    {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-    {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-    {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-    {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
-    {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-    {{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-    {{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-    {{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}};
-
-const std::vector<uint16_t> indices = {0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4};
-
 class HelloTriangleApplication {
 public:
   void run() {
@@ -143,6 +136,8 @@ private:
   vk::raii::PipelineLayout pipeline_layout = nullptr;
   vk::raii::Pipeline graphics_pipeline = nullptr;
   vk::raii::CommandPool command_pool = nullptr;
+  std::vector<Vertex> vertices;
+  std::vector<uint32_t> indices;
   vk::raii::Buffer vertex_buffer = nullptr;
   vk::raii::DeviceMemory vertex_buffer_memory = nullptr;
   vk::raii::Buffer index_buffer = nullptr;
@@ -202,6 +197,7 @@ private:
     create_texture_image();
     create_texture_image_view();
     create_texture_sampler();
+    load_model();
     create_vertex_buffer();
     create_index_buffer();
     create_uniform_buffers();
@@ -322,13 +318,11 @@ private:
   void create_sync_objects() {
     assert(present_complete_semaphores.empty() &&
            render_finished_semaphores.empty() && in_flight_fences.empty());
-    for (int i = 0; i < swap_chain_images.size(); i++) {
-      render_finished_semaphores.emplace_back(device,
-                                              vk::SemaphoreCreateInfo());
-    }
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
       present_complete_semaphores.emplace_back(device,
                                                vk::SemaphoreCreateInfo());
+      render_finished_semaphores.emplace_back(device,
+                                              vk::SemaphoreCreateInfo());
       in_flight_fences.emplace_back(
           device,
           vk::FenceCreateInfo().setFlags(vk::FenceCreateFlagBits::eSignaled));
@@ -782,8 +776,8 @@ private:
   void create_texture_image() {
     int text_widht, text_height, text_channels;
     // Load Torre Archirafi pixel art
-    stbi_uc *pixels = stbi_load("textures/texture.png", &text_widht,
-                                &text_height, &text_channels, STBI_rgb_alpha);
+    stbi_uc *pixels = stbi_load(TEXTURE_PATH.c_str(), &text_widht, &text_height,
+                                &text_channels, STBI_rgb_alpha);
 
     vk::DeviceSize image_size = text_widht * text_height * 4;
 
@@ -819,7 +813,7 @@ private:
     transition_image_layout(command_buffer, texture_image,
                             vk::ImageLayout::eTransferDstOptimal,
                             vk::ImageLayout::eShaderReadOnlyOptimal,
-                            vk::ImageAspectFlagBits::eDepth);
+                            vk::ImageAspectFlagBits::eColor);
     end_single_time_commands(std::move(command_buffer));
   }
 
@@ -976,6 +970,42 @@ private:
             .setCompareOp(vk::CompareOp::eAlways);
 
     texture_sampler = vk::raii::Sampler(device, sampler_info);
+  }
+
+  void load_model() {
+    tinyobj::attrib_t attrib;
+    std::vector<tinyobj::shape_t> shapes;
+    std::vector<tinyobj::material_t> materials;
+    std::string warn, err;
+
+    if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err,
+                          MODEL_PATH.c_str())) {
+      throw std::runtime_error(warn + err);
+    }
+
+    for (const auto &shape : shapes) {
+      for (const auto &index : shape.mesh.indices) {
+        Vertex vertex{};
+
+        vertex.pos = {attrib.vertices[3 * index.vertex_index + 0],
+                      attrib.vertices[3 * index.vertex_index + 1],
+                      attrib.vertices[3 * index.vertex_index + 2]};
+
+        if (index.texcoord_index >= 0) {
+          vertex.text_coord = {
+              attrib.texcoords[2 * index.texcoord_index + 0],
+              1.0f - attrib.texcoords[2 * index.texcoord_index + 1],
+          };
+        } else {
+          vertex.text_coord = {0.0f, 0.0f};
+        }
+
+        vertex.color = {1.0f, 1.0f, 1.0f};
+
+        vertices.push_back(vertex);
+        indices.push_back(indices.size());
+      }
+    }
   }
 
   void create_vertex_buffer() {
@@ -1186,11 +1216,22 @@ private:
     auto &command_buffer = command_buffers[frame_index];
     command_buffer.begin({});
 
-    transition_image_layour(image_index, vk::ImageLayout::eUndefined,
+    transition_image_layour(swap_chain_images[image_index],
+                            vk::ImageLayout::eUndefined,
                             vk::ImageLayout::eColorAttachmentOptimal, {},
                             vk::AccessFlagBits2::eColorAttachmentWrite,
                             vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-                            vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+                            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                            vk::ImageAspectFlagBits::eColor);
+
+    transition_image_layour(*depth_image,
+                            vk::ImageLayout::eUndefined,
+                            vk::ImageLayout::eDepthAttachmentOptimal,
+                            vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+                            vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+                            vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+                            vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+                            vk::ImageAspectFlagBits::eDepth);
 
     auto clear_color = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
     auto clear_depth = vk::ClearDepthStencilValue(1.0f, 0);
@@ -1222,7 +1263,9 @@ private:
     command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics,
                                 *graphics_pipeline);
     command_buffer.bindVertexBuffers(0, *vertex_buffer, {0});
-    command_buffer.bindIndexBuffer(*index_buffer, 0, vk::IndexType::eUint16);
+    command_buffer.bindIndexBuffer(
+        *index_buffer, 0,
+        vk::IndexTypeValue<decltype(indices)::value_type>::value);
     command_buffer.setViewport(
         0,
         vk::Viewport(0.0f, 0.0f, static_cast<float>(swap_chain_extent.width),
@@ -1236,22 +1279,24 @@ private:
                                0);
     command_buffer.endRendering();
 
-    transition_image_layour(image_index,
+    transition_image_layour(swap_chain_images[image_index],
                             vk::ImageLayout::eColorAttachmentOptimal,
                             vk::ImageLayout::ePresentSrcKHR,
                             vk::AccessFlagBits2::eColorAttachmentWrite, {},
                             vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-                            vk::PipelineStageFlagBits2::eBottomOfPipe);
+                            vk::PipelineStageFlagBits2::eBottomOfPipe,vk::ImageAspectFlagBits::eColor);
 
     command_buffer.end();
   }
 
-  void transition_image_layour(uint32_t image_index, vk::ImageLayout old_layout,
+  void transition_image_layour(vk::Image image,
+                               vk::ImageLayout old_layout,
                                vk::ImageLayout new_layout,
                                vk::AccessFlags2 src_access_mask,
                                vk::AccessFlags2 dst_access_mask,
                                vk::PipelineStageFlags2 src_stage_mask,
-                               vk::PipelineStageFlags2 dst_stage_mask) {
+                               vk::PipelineStageFlags2 dst_stage_mask,
+                               vk::ImageAspectFlags image_aspect_flags) {
     auto barrier = vk::ImageMemoryBarrier2()
                        .setSrcStageMask(src_stage_mask)
                        .setSrcAccessMask(src_access_mask)
@@ -1261,10 +1306,10 @@ private:
                        .setNewLayout(new_layout)
                        .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
                        .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-                       .setImage(swap_chain_images[image_index])
+                       .setImage(image)
                        .setSubresourceRange(
                            vk::ImageSubresourceRange()
-                               .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                               .setAspectMask(image_aspect_flags)
                                .setBaseMipLevel(0)
                                .setLevelCount(1)
                                .setBaseArrayLayer(0)
