@@ -39,7 +39,15 @@ function(add_slang_shader_target TARGET_NAME)
     # Comando per compilare il file .slang in .spv
     add_custom_command(
         OUTPUT ${OUTPUT_SPV}
-        COMMAND ${SLANGC_EXECUTABLE} ${SHADER_SOURCES} -target spirv -profile spirv_1_4 -emit-spirv-directly -fvk-use-entrypoint-name -entry vertMain -entry fragMain -o ${OUTPUT_SPV}
+        COMMAND ${SLANGC_EXECUTABLE} ${SHADER_SOURCES}
+          -target spirv
+          -profile spirv_1_4
+          -emit-spirv-directly
+          -fvk-use-entrypoint-name
+          -entry vertMain
+          -entry fragMain
+          -entry compMain
+          -o ${OUTPUT_SPV}
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         DEPENDS ${SHADERS_DIR} ${SHADER_SOURCES}
         COMMENT "Compilazione dello shader Slang in SPIR-V..."
