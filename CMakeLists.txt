@@ -20,6 +20,9 @@ include_directories(/usr/include)
 # 4. Definisci l'eseguibile
 add_executable(VulkanApp main.cpp)
 
+# Passa la macro al compilatore C++ (attiva l'import nel codice)
+# target_compile_definitions(VulkanApp PRIVATE USE_CPP20_MODULES)
+
 # 5. Linka le librerie
 target_link_libraries(VulkanApp PRIVATE Vulkan::Vulkan glfw)
 
@@ -36,10 +39,17 @@ function(add_slang_shader_target TARGET_NAME)
         COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADERS_DIR}
     )
 
-    # Comando per compilare il file .slang in .spv
+    # Comando per compilare il file .slang in .spv (spezzato su più righe)
     add_custom_command(
         OUTPUT ${OUTPUT_SPV}
-        COMMAND ${SLANGC_EXECUTABLE} ${SHADER_SOURCES} -target spirv -profile spirv_1_4 -emit-spirv-directly -fvk-use-entrypoint-name -entry vertMain -entry fragMain -o ${OUTPUT_SPV}
+        COMMAND ${SLANGC_EXECUTABLE} ${SHADER_SOURCES}
+            -target spirv
+            -profile spirv_1_4
+            -emit-spirv-directly
+            -fvk-use-entrypoint-name
+            -entry vertMain
+            -entry fragMain
+            -o ${OUTPUT_SPV}
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         DEPENDS ${SHADERS_DIR} ${SHADER_SOURCES}
         COMMENT "Compilazione dello shader Slang in SPIR-V..."
@@ -56,6 +66,5 @@ set(MY_SLANG_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shader.slang)
 # Crea il target per lo shader chiamato "CompileShaders"
 add_slang_shader_target(CompileShaders SOURCES ${MY_SLANG_SOURCES})
 
-# Dici a CMake che VulkanApp DIPENDE da CompileShaders:
-# In questo modo, quando fai la build di VulkanApp, lo shader verrà compilato automaticamente per primo!
+# Dici a CMake che VulkanApp DIPENDE da CompileShaders
 add_dependencies(VulkanApp CompileShaders)
