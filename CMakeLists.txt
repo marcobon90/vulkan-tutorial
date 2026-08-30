@@ -46,7 +46,6 @@ function(add_slang_shader_target TARGET_NAME)
           -fvk-use-entrypoint-name
           -entry vertMain
           -entry fragMain
-          -entry compMain
           -o ${OUTPUT_SPV}
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         DEPENDS ${SHADERS_DIR} ${SHADER_SOURCES}
