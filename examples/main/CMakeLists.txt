@@ -64,5 +64,6 @@ set(MY_SLANG_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shader.slang)
 add_slang_shader_target(CompileShaders SOURCES ${MY_SLANG_SOURCES})
 
 # Dici a CMake che VulkanApp DIPENDE da CompileShaders:
-# In questo modo, quando fai la build di VulkanApp, lo shader verrà compilato automaticamente per primo!
+# In questo modo, quando fai la build di VulkanApp,
+# lo shader verrà compilato automaticamente per primo!
 add_dependencies(VulkanApp CompileShaders)

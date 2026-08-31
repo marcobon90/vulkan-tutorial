@@ -20,4 +20,4 @@ You can now use CMake to build your Vulkan project:
 cmake -B build -S . -G Ninja
 Then build the project using:
 cmake --build build
-Finish! You can now run your Vulkan application from the build directory using ./build/VulkanApp
+Finish! You can now run your Vulkan application from the build directory using ./build/CompShaderApp

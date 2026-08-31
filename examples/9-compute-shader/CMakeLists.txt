@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.29)
-project(VulkanApp CXX)
+project(CompShaderApp CXX)
 
 # Imposta lo standard C++
 set(CMAKE_CXX_STANDARD 26)
@@ -18,10 +18,10 @@ find_program(SLANGC_EXECUTABLE slangc REQUIRED)
 include_directories(/usr/include)
 
 # 4. Definisci l'eseguibile
-add_executable(VulkanApp main.cpp)
+add_executable(CompShaderApp main.cpp)
 
 # 5. Linka le librerie
-target_link_libraries(VulkanApp PRIVATE Vulkan::Vulkan glfw)
+target_link_libraries(CompShaderApp PRIVATE Vulkan::Vulkan glfw)
 
 # 6. Compilazione automatica degli Shader Slang
 function(add_slang_shader_target TARGET_NAME)
@@ -64,7 +64,7 @@ set(MY_SLANG_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shader.slang)
 # Crea il target per lo shader chiamato "CompileShaders"
 add_slang_shader_target(CompileShaders SOURCES ${MY_SLANG_SOURCES})
 
-# Dici a CMake che VulkanApp DIPENDE da CompileShaders:
-# In questo modo, quando fai la build di VulkanApp,
+# Dici a CMake che CompShaderApp DIPENDE da CompileShaders:
+# In questo modo, quando fai la build di CompShaderApp,
 #  lo shader verrà compilato automaticamente per primo!
-add_dependencies(VulkanApp CompileShaders)
+add_dependencies(CompShaderApp CompileShaders)
