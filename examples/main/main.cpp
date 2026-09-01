@@ -3,30 +3,27 @@
 #include <array>
 #include <cassert>
 #include <chrono>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <fstream>
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/ext/vector_float2.hpp>
 #include <glm/ext/vector_float3.hpp>
 #include <glm/fwd.hpp>
-#include <unordered_map>
+#include <memory>
+#include <ostream>
+#include <tuple>
+#include <utility>
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/trigonometric.hpp>
-#include <ios>
 #include <iostream>
-#include <limits>
 #include <stdexcept>
 #include <string>
-#include <tuple>
-#include <utility>
 #include <vector>
 #include <vulkan/vk_platform.h>
 #include <vulkan/vulkan_core.h>
@@ -66,6 +63,12 @@ constexpr bool enable_validation_layers = true;
 
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/hash.hpp>
+
+struct AppInfo {
+  bool dynamic_rendering_supported = false;
+  bool timeline_sempaphore_supported = false;
+  bool synchronization2_supported = false;
+};
 
 struct Vertex {
   glm::vec3 pos;
@@ -136,66 +139,71 @@ public:
   }
 
 private:
-  GLFWwindow                       *window         = nullptr;
-  vk::raii::Context                context;
-  vk::raii::Instance               instance        = nullptr;
+  AppInfo app_info;
+
+  GLFWwindow *window = nullptr;
+  vk::raii::Context context;
+  vk::raii::Instance instance = nullptr;
   vk::raii::DebugUtilsMessengerEXT debug_messenger = nullptr;
-  vk::raii::SurfaceKHR             surface         = nullptr;
-
-  vk::raii::PhysicalDevice         physical_device = nullptr;
-  vk::SampleCountFlagBits          msaa_samples    = vk::SampleCountFlagBits::e1;
-  vk::raii::Device                 device          = nullptr;
-  uint32_t                         queue_index     = ~0;
-  vk::raii::Queue                  queue           = nullptr;
-
-  vk::raii::SwapchainKHR           swap_chain      = nullptr;
-  std::vector<vk::Image>           swap_chain_images;
-  vk::SurfaceFormatKHR             swap_chain_surface_format;
-  vk::Extent2D                     swap_chain_extent;
+  vk::raii::SurfaceKHR surface = nullptr;
+  vk::raii::PhysicalDevice physical_device = nullptr;
+  vk::SampleCountFlagBits msaa_samples = vk::SampleCountFlagBits::e1;
+  vk::raii::Device device = nullptr;
+  uint32_t queue_index = ~0;
+  vk::raii::Queue queue = nullptr;
+  vk::raii::SwapchainKHR swap_chain = nullptr;
+  std::vector<vk::Image> swap_chain_images;
+  vk::SurfaceFormatKHR swap_chain_surface_format;
+  vk::Extent2D swap_chain_extent;
   std::vector<vk::raii::ImageView> swap_chain_image_views;
 
+  // Traditional render pass (fallback for non-dynamic rendering)
+  vk::raii::RenderPass render_pass = nullptr;
+  std::vector<vk::raii::Framebuffer> swap_chain_frame_buffers;
+
   vk::raii::DescriptorSetLayout descriptor_set_layout = nullptr;
-  vk::raii::PipelineLayout      pipeline_layout       = nullptr;
-  vk::raii::Pipeline            graphics_pipeline     = nullptr;
+  vk::raii::PipelineLayout pipeline_layout = nullptr;
+  vk::raii::Pipeline graphics_pipeline = nullptr;
 
-  vk::raii::Image        color_image        = nullptr;
+  vk::raii::Image color_image = nullptr;
   vk::raii::DeviceMemory color_image_memory = nullptr;
-  vk::raii::ImageView    color_image_view   = nullptr;
+  vk::raii::ImageView color_image_view = nullptr;
 
-  vk::raii::Image depth_image               = nullptr;
+  vk::raii::Image depth_image = nullptr;
   vk::raii::DeviceMemory depth_image_memory = nullptr;
-  vk::raii::ImageView depth_image_view      = nullptr;
+  vk::raii::ImageView depth_image_view = nullptr;
 
-  uint32_t               mip_levels           = 0;
-  vk::raii::Image        texture_image        = nullptr;
+  uint32_t mip_levels = 0;
+  vk::raii::Image texture_image = nullptr;
   vk::raii::DeviceMemory texture_image_memory = nullptr;
-  vk::raii::ImageView    texture_image_view   = nullptr;
-  vk::raii::Sampler      texture_sampler      = nullptr;
+  vk::raii::ImageView texture_image_view = nullptr;
+  vk::raii::Sampler texture_sampler = nullptr;
 
-  std::vector<Vertex>    vertices;
-  std::vector<uint32_t>  indices;
-  vk::raii::Buffer       vertex_buffer        = nullptr;
+  std::vector<Vertex> vertices;
+  std::vector<uint32_t> indices;
+  vk::raii::Buffer vertex_buffer = nullptr;
   vk::raii::DeviceMemory vertex_buffer_memory = nullptr;
-  vk::raii::Buffer       index_buffer         = nullptr;
-  vk::raii::DeviceMemory index_buffer_memory  = nullptr;
+  vk::raii::Buffer index_buffer = nullptr;
+  vk::raii::DeviceMemory index_buffer_memory = nullptr;
 
-  std::vector<vk::raii::Buffer>       uniform_buffers;
+  std::vector<vk::raii::Buffer> uniform_buffers;
   std::vector<vk::raii::DeviceMemory> uniform_buffers_memory;
-  std::vector<void *>                 uniform_buffers_mapped;
+  std::vector<void *> uniform_buffers_mapped;
 
-  vk::raii::DescriptorPool             descriptor_pool = nullptr;
+  vk::raii::DescriptorPool descriptor_pool = nullptr;
   std::vector<vk::raii::DescriptorSet> descriptor_sets;
 
-  vk::raii::CommandPool                command_pool = nullptr;
+  vk::raii::CommandPool command_pool = nullptr;
   std::vector<vk::raii::CommandBuffer> command_buffers;
 
   std::vector<vk::raii::Semaphore> present_complete_semaphores;
   std::vector<vk::raii::Semaphore> render_finished_semaphores;
-  std::vector<vk::raii::Fence>     in_flight_fences;
-  uint32_t                         frame_index = 0;
+  std::vector<vk::raii::Fence> in_flight_fences;
+  uint32_t frame_index = 0;
+  vk::raii::Semaphore time_line_semaphore = nullptr;
+  uint64_t time_line_value = 0;
 
   bool framebuffer_resized = false;
-
 
   std::vector<const char *> required_device_extension = {
       vk::KHRSwapchainExtensionName};
@@ -223,9 +231,16 @@ private:
     setup_debug_messenger();
     create_surface();
     pick_physical_device();
+    detect_feature_support();
     create_logical_device();
     create_swap_chain();
     create_image_views();
+
+    if (!app_info.dynamic_rendering_supported) {
+      create_render_pass();
+      create_frame_buffers();
+    }
+
     create_descriptor_set_layout();
     create_graphics_pipeline();
     create_command_pool();
@@ -238,10 +253,20 @@ private:
     create_vertex_buffer();
     create_index_buffer();
     create_uniform_buffers();
-    create_description_pool();
+    create_descriptor_pool();
     create_descriptor_sets();
     create_command_buffers();
     create_sync_objects();
+
+    // Print feature support summary
+    std::cout << "\nFeature support summary:\n";
+    std::cout << "- Dynamic rendering: "
+              << (app_info.dynamic_rendering_supported ? "Yes" : "No") << "\n";
+    std::cout << "- Timeline Semaphore: "
+              << (app_info.timeline_sempaphore_supported ? "Yes" : "No")
+              << "\n";
+    std::cout << "- Synchronization2: "
+              << (app_info.synchronization2_supported ? "Yes" : "No") << "\n";
   }
 
   void main_loop() {
@@ -253,16 +278,14 @@ private:
     device.waitIdle();
   }
 
-
   void cleanup_swapchain() {
-    swap_chain.clear();
+    swap_chain_frame_buffers.clear();
+    swap_chain_image_views.clear();
     swap_chain = nullptr;
   }
 
   void cleanup() {
-    cleanup_swapchain();
     glfwDestroyWindow(window);
-
     glfwTerminate();
   }
 
@@ -278,78 +301,39 @@ private:
     cleanup_swapchain();
     create_swap_chain();
     create_image_views();
+
+    if (!app_info.dynamic_rendering_supported) {
+      create_render_pass();
+      create_frame_buffers();
+    }
+
     create_color_resources();
     create_depth_resources();
   }
 
   void create_instance() {
-    vk::ApplicationInfo const appInfo =
+    constexpr vk::ApplicationInfo appInfo =
         vk::ApplicationInfo()
             .setPApplicationName("Hello Triangle")
+            .setApplicationVersion(VK_MAKE_VERSION(1, 0, 0))
             .setPEngineName("No Engine")
             .setEngineVersion(VK_MAKE_VERSION(1, 0, 0))
             .setApiVersion(vk::ApiVersion14);
 
-    // Get required layers
-    std::vector<char const *> required_layers;
-    if (enable_validation_layers) {
-      required_layers.assign(validation_layers.begin(),
-                             validation_layers.end());
-    }
-
-    auto layer_properties = context.enumerateInstanceLayerProperties();
-
-    // Cerca in required_layers il PRIMO layer che NON viene trovato in
-    // layer_properties
-    auto unsupported_layer_it = std::find_if(
-        required_layers.begin(), required_layers.end(),
-        [&layer_properties](auto const &required_layer) {
-          // Catturo layer_properties. required_layer è un singolo layer
-          // richiesto. none_of restituisce true se NESSUN layer della GPU
-          // corrisponde a required_layer.
-          return std::none_of(layer_properties.begin(), layer_properties.end(),
-                              [required_layer](auto const &layer_property) {
-                                // Confronta il singolo layer GPU con il singolo
-                                // layer richiesto
-                                return strcmp(layer_property.layerName,
-                                              required_layer) ==
-                                       0; // == 0 FONDAMENTALE!
-                              });
-        });
-
-    // Confronto la posizione dell'elemento trovato.
-    //  Se risulta uguale a required_layers.end() cioè la posizione successiva
-    //  all'ultimo elemento Allora tutti tutti i layer sono supportati.
-    if (unsupported_layer_it != required_layers.end()) {
-      throw std::runtime_error("Required layer not supported: " +
-                               std::string(*unsupported_layer_it));
-    }
-
     // Get  the required extensions
     auto required_exts = get_required_instance_extensions();
-    auto extension_properties = context.enumerateInstanceExtensionProperties();
 
-    auto unsupported_property_it = std::find_if(
-        required_exts.begin(), required_exts.end(),
-        [&extension_properties](auto const &required_extension) {
-          return std::none_of(
-              extension_properties.begin(), extension_properties.end(),
-              [required_extension](auto const &extension_property) {
-                return strcmp(extension_property.extensionName,
-                              required_extension) == 0;
-              });
-        });
-
-    if (unsupported_property_it != required_exts.end()) {
-      throw std::runtime_error("Required extension not supported: " +
-                               std::string(*unsupported_property_it));
-    }
-
+    /*
+     * I deleted enable validation layers and properties instructions.
+     * I enabled VK_LAYER_KHRONOS_validation layer using
+     * - vkconfig.exe on Windows
+     * - vkconfig gui on Linux
+     * Ref:
+     * https://docs.vulkan.org/tutorial/latest/12_Ecosystem_Utilities_and_Compatibility.html
+     */
     vk::InstanceCreateInfo const createInfo =
         vk::InstanceCreateInfo()
             .setPApplicationInfo(&appInfo)
-            .setEnabledLayerCount(static_cast<uint32_t>(required_layers.size()))
-            .setPpEnabledLayerNames(required_layers.data())
             .setEnabledExtensionCount(
                 static_cast<uint32_t>(required_exts.size()))
             .setPpEnabledExtensionNames(required_exts.data());
@@ -358,10 +342,11 @@ private:
   }
 
   void setup_debug_messenger() {
-    if (!enable_validation_layers)
-      return;
+    // Always set up the debug messenger
+    // It will only be used if validation layers are enabled via vulkanconfig
 
     vk::DebugUtilsMessageSeverityFlagsEXT severity_flags(
+        vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose |
         vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
         vk::DebugUtilsMessageSeverityFlagBitsEXT::eError);
 
@@ -370,14 +355,22 @@ private:
         vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance |
         vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation);
 
-    vk::DebugUtilsMessengerCreateInfoEXT const debug_utils_create_info_ext =
+    vk::DebugUtilsMessengerCreateInfoEXT debug_utils_create_info_ext =
         vk::DebugUtilsMessengerCreateInfoEXT()
             .setMessageSeverity(severity_flags)
             .setMessageType(message_type_flags)
             .setPfnUserCallback(&debug_callback);
 
-    debug_messenger =
-        instance.createDebugUtilsMessengerEXT(debug_utils_create_info_ext);
+    try {
+      debug_messenger =
+          instance.createDebugUtilsMessengerEXT(debug_utils_create_info_ext);
+    } catch (vk::SystemError &err) {
+      // If the debug utils extension is not available, this will fail
+      // That's okay; it just means validation layers aren't enabled
+      std::cout << "Debug messenger not available. Validation layers may not "
+                   "be enabled."
+                << std::endl;
+    }
   }
 
   void create_surface() {
@@ -385,7 +378,6 @@ private:
     if (glfwCreateWindowSurface(*instance, window, nullptr, &_surface) != 0) {
       throw std::runtime_error("failed to create window surface!");
     }
-    std::cout << "Surfece creata" << std::endl;
     surface = vk::raii::SurfaceKHR(instance, _surface);
   }
 
@@ -414,20 +406,8 @@ private:
               });
         });
 
-    auto features = physical_device.getFeatures2<
-        vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features,
-        vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
-
-    bool supports_required_features =
-        features.get<vk::PhysicalDeviceFeatures2>()
-            .features.samplerAnisotropy &&
-        features.get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
-        features.get<vk::PhysicalDeviceVulkan13Features>().synchronization2 &&
-        features.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>()
-            .extendedDynamicState;
-
-    return supports_required_features && supported_all_required_extensions &&
-           supported_vulkan1_3 && supports_graphics;
+    return supported_all_required_extensions && supported_vulkan1_3 &&
+           supports_graphics;
   }
 
   void pick_physical_device() {
@@ -443,6 +423,79 @@ private:
     physical_device = *dev_iter;
 
     msaa_samples = get_max_usable_sample_count();
+  }
+
+  void detect_feature_support() {
+    auto device_properties = physical_device.getProperties();
+
+    auto available_extensions =
+        physical_device.enumerateDeviceExtensionProperties();
+
+    // Check for dynamic rendering support
+    if (device_properties.apiVersion >= VK_VERSION_1_3) {
+      app_info.dynamic_rendering_supported = true;
+      std::cout << "Dynamic rendering supported via Vulkan 1.3\n";
+    } else {
+      // Check for the extension on older Vulkan versions
+      for (const auto &extension : available_extensions) {
+        if (strcmp(extension.extensionName,
+                   VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME) == 0) {
+          app_info.dynamic_rendering_supported = true;
+          std::cout << "Dynamic rendering supported via extensions\n";
+          break;
+        }
+      }
+    }
+
+    // Check for timeline semaphores support
+    if (device_properties.apiVersion >= VK_VERSION_1_2) {
+      app_info.timeline_sempaphore_supported = true;
+      std::cout << "Timeline semaphores supported via Vulkan 1.2\n";
+    } else {
+      // Check for the extension on older Vulkan versions
+      for (const auto &extension : available_extensions) {
+        if (strcmp(extension.extensionName,
+                   VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME) == 0) {
+          app_info.timeline_sempaphore_supported = true;
+          std::cout << "Timeline semaphores supported via extensions\n";
+          break;
+        }
+      }
+    }
+
+    // Check for dynamic rendering support
+    if (device_properties.apiVersion >= VK_VERSION_1_3) {
+      app_info.synchronization2_supported = true;
+      std::cout << "Synchronization2 supported via Vulkan 1.3\n";
+    } else {
+      // Check for the extension on older Vulkan versions
+      for (const auto &extension : available_extensions) {
+        if (strcmp(extension.extensionName,
+                   VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME) == 0) {
+          app_info.synchronization2_supported = true;
+          std::cout << "Synchronization2 supported via extensions\n";
+          break;
+        }
+      }
+    }
+    // Add required extensions based on feature support
+    if (app_info.dynamic_rendering_supported &&
+        device_properties.apiVersion < VK_VERSION_1_3) {
+      required_device_extension.push_back(
+          VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
+    }
+
+    if (app_info.timeline_sempaphore_supported &&
+        device_properties.apiVersion < VK_VERSION_1_2) {
+      required_device_extension.push_back(
+          VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
+    }
+
+    if (app_info.synchronization2_supported &&
+        device_properties.apiVersion < VK_VERSION_1_3) {
+      required_device_extension.push_back(
+          VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME);
+    }
   }
 
   void create_logical_device() {
@@ -463,18 +516,41 @@ private:
       throw std::runtime_error(
           "Could not find a queue for graphics and present -> terminating");
 
-    auto feature_chain =
-        vk::StructureChain<vk::PhysicalDeviceFeatures2,
-                           vk::PhysicalDeviceVulkan13Features,
-                           vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>{
-            vk::PhysicalDeviceFeatures2().setFeatures(
-                vk::PhysicalDeviceFeatures().setSampleRateShading(vk::True).setSamplerAnisotropy(true)),
-            vk::PhysicalDeviceVulkan13Features()
-                .setSynchronization2(true)
-                .setDynamicRendering(true),
-            vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT()
-                .setExtendedDynamicState(true)};
+    // Create device with appropriate features
+    auto features = physical_device.getFeatures2();
 
+    // Setup feature chain based on detected support
+    void *p_next = nullptr;
+
+    // Add dynamic rendering if supported
+    vk::PhysicalDeviceVulkan13Features vulkan13_features;
+    vk::PhysicalDeviceDynamicRenderingFeatures dynamic_rendering_features;
+
+    if (app_info.dynamic_rendering_supported) {
+      if (app_info.synchronization2_supported) {
+        vulkan13_features.setDynamicRendering(vk::True)
+            .setSynchronization2(vk::True)
+            .setPNext(p_next);
+
+        p_next = &vulkan13_features;
+      } else {
+        dynamic_rendering_features.setDynamicRendering(vk::True).setPNext(
+            p_next);
+        p_next = &dynamic_rendering_features;
+      }
+    }
+
+    // Add timeline semaphores if supported
+    vk::PhysicalDeviceTimelineSemaphoreFeatures timeline_semaphore_features;
+    if (app_info.timeline_sempaphore_supported) {
+      timeline_semaphore_features.setTimelineSemaphore(vk::True).setPNext(
+          p_next);
+      p_next = &timeline_semaphore_features;
+    }
+
+    features.setPNext(p_next);
+
+    // Create a device
     float queue_priority = 0.5f;
     auto device_queue_create_info = vk::DeviceQueueCreateInfo()
                                         .setQueueFamilyIndex(queue_index)
@@ -483,7 +559,7 @@ private:
 
     auto device_create_info =
         vk::DeviceCreateInfo()
-            .setPNext(&feature_chain.get<vk::PhysicalDeviceFeatures2>())
+            .setPNext(&features)
             .setQueueCreateInfoCount(1)
             .setPQueueCreateInfos(&device_queue_create_info)
             .setEnabledExtensionCount(
@@ -537,6 +613,122 @@ private:
       swap_chain_image_views.emplace_back(
           create_image_view(image, swap_chain_surface_format.format,
                             vk::ImageAspectFlagBits::eColor, 1));
+    }
+  }
+
+  void create_render_pass() {
+    if (app_info.dynamic_rendering_supported) {
+      // No render pass needed with dynamic rendering
+      std::cout << "Using dynamic rendering, skipping render pass creation\n";
+      return;
+    }
+
+    std::cout << "Creating traditional render pass\n";
+
+    auto color_attachment =
+        vk::AttachmentDescription()
+            .setFormat(swap_chain_surface_format.format)
+            .setSamples(msaa_samples)
+            .setLoadOp(vk::AttachmentLoadOp::eClear)
+            .setStoreOp(vk::AttachmentStoreOp::eStore)
+            .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
+            .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
+            .setInitialLayout(vk::ImageLayout::eUndefined)
+            .setFinalLayout(vk::ImageLayout::eColorAttachmentOptimal);
+
+    auto depth_attachment =
+        vk::AttachmentDescription()
+            .setFormat(find_depth_format())
+            .setSamples(msaa_samples)
+            .setLoadOp(vk::AttachmentLoadOp::eClear)
+            .setStoreOp(vk::AttachmentStoreOp::eDontCare)
+            .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
+            .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
+            .setInitialLayout(vk::ImageLayout::eUndefined)
+            .setFinalLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal);
+
+    auto color_attachment_resolve =
+        vk::AttachmentDescription()
+            .setFormat(swap_chain_surface_format.format)
+            .setSamples(vk::SampleCountFlagBits::e1)
+            .setLoadOp(vk::AttachmentLoadOp::eDontCare)
+            .setStoreOp(vk::AttachmentStoreOp::eStore)
+            .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
+            .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
+            .setFinalLayout(vk::ImageLayout::eUndefined)
+            .setFinalLayout(vk::ImageLayout::ePresentSrcKHR);
+
+    auto color_attachment_ref =
+        vk::AttachmentReference().setAttachment(0).setLayout(
+            vk::ImageLayout::eColorAttachmentOptimal);
+
+    auto depth_attachment_ref =
+        vk::AttachmentReference().setAttachment(1).setLayout(
+            vk::ImageLayout::eDepthStencilAttachmentOptimal);
+
+    auto color_attachment_resolve_ref =
+        vk::AttachmentReference().setAttachment(2).setLayout(
+            vk::ImageLayout::eColorAttachmentOptimal);
+
+    auto subpass = vk::SubpassDescription()
+                       .setPipelineBindPoint(vk::PipelineBindPoint::eGraphics)
+                       .setColorAttachmentCount(1)
+                       .setPColorAttachments(&color_attachment_ref)
+                       .setPResolveAttachments(&color_attachment_resolve_ref)
+                       .setPDepthStencilAttachment(&depth_attachment_ref);
+
+    auto dependency =
+        vk::SubpassDependency()
+            .setSrcSubpass(VK_SUBPASS_EXTERNAL)
+            .setDstSubpass(0)
+            .setSrcStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput |
+                             vk::PipelineStageFlagBits::eEarlyFragmentTests)
+            .setDstStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput |
+                             vk::PipelineStageFlagBits::eEarlyFragmentTests)
+            .setSrcAccessMask(vk::AccessFlagBits::eNone)
+            .setDstAccessMask(vk::AccessFlagBits::eColorAttachmentWrite |
+                              vk::AccessFlagBits::eDepthStencilAttachmentWrite);
+
+    // Create the render pass
+    std::array<vk::AttachmentDescription, 3> attachments = {
+        color_attachment, depth_attachment, color_attachment_resolve};
+    auto render_pass_info =
+        vk::RenderPassCreateInfo()
+            .setAttachmentCount(static_cast<uint32_t>(attachments.size()))
+            .setPAttachments(attachments.data())
+            .setSubpassCount(1)
+            .setPSubpasses(&subpass)
+            .setDependencyCount(1)
+            .setPDependencies(&dependency);
+
+    render_pass = vk::raii::RenderPass(device, render_pass_info);
+  }
+
+  void create_frame_buffers() {
+    if (app_info.dynamic_rendering_supported) {
+      // No render pass needed with dynamic rendering
+      std::cout << "Using dynamic rendering, skipping framebuffer creation\n";
+      return;
+    }
+
+    std::cout << "Creating traditional framebuffers\n";
+
+    swap_chain_frame_buffers.clear();
+
+    for (size_t i = 0; i < swap_chain_image_views.size(); i++) {
+      std::array<vk::ImageView, 3> attachmens = {
+          *color_image_view, *depth_image_view, *swap_chain_image_views[i]};
+
+      auto framebuffer_info =
+          vk::FramebufferCreateInfo()
+              .setRenderPass(*render_pass)
+              .setAttachmentCount(static_cast<uint32_t>(attachmens.size()))
+              .setPAttachments(attachmens.data())
+              .setWidth(swap_chain_extent.width)
+              .setHeight(swap_chain_extent.height)
+              .setLayers(1);
+
+      swap_chain_frame_buffers.emplace_back(device, framebuffer_info);
     }
   }
 
@@ -621,7 +813,8 @@ private:
 
     auto multisampling = vk::PipelineMultisampleStateCreateInfo()
                              .setRasterizationSamples(msaa_samples)
-                             .setSampleShadingEnable(vk::True).setMinSampleShading(0.2f);
+                             .setSampleShadingEnable(vk::True)
+                             .setMinSampleShading(0.2f);
 
     auto color_blend_attachment =
         vk::PipelineColorBlendAttachmentState()
@@ -650,26 +843,12 @@ private:
 
     pipeline_layout = vk::raii::PipelineLayout(device, pipeline_layout_info);
 
-    // auto pipeline_rendering_create_info =
-    //     vk::PipelineRenderingCreateInfo()
-    //         .setColorAttachmentCount(1)
-    //         .setPColorAttachmentFormats(&swap_chain_surface_format.format);
-
-    auto depth_stencil = vk::PipelineDepthStencilStateCreateInfo()
-                             .setDepthTestEnable(vk::True)
-                             .setDepthWriteEnable(vk::True)
-                             .setDepthCompareOp(vk::CompareOp::eLess)
-                             .setDepthBoundsTestEnable(vk::False)
-                             .setStencilTestEnable(vk::False);
-
-    auto depth_format = find_depth_format();
     auto pipeline_create_info_chain =
         vk::StructureChain<vk::GraphicsPipelineCreateInfo,
                            vk::PipelineRenderingCreateInfo>{
             vk::GraphicsPipelineCreateInfo()
                 .setStageCount(2)
                 .setPStages(shader_stages)
-                .setPDepthStencilState(&depth_stencil)
                 .setPVertexInputState(&vertex_input_info)
                 .setPInputAssemblyState(&input_assembly)
                 .setPViewportState(&view_port_state)
@@ -683,7 +862,16 @@ private:
             vk::PipelineRenderingCreateInfo()
                 .setColorAttachmentCount(1)
                 .setPColorAttachmentFormats(&swap_chain_surface_format.format)
-                .setDepthAttachmentFormat(depth_format)};
+                .setDepthAttachmentFormat(find_depth_format())};
+
+    if (app_info.dynamic_rendering_supported) {
+      std::cout << "Configuring pipeline for dynamic rendering\n";
+    } else {
+      std::cout << "Configurin pipeline for traditional render pass\n";
+      pipeline_create_info_chain.unlink<vk::PipelineRenderingCreateInfo>();
+      pipeline_create_info_chain.get<vk::GraphicsPipelineCreateInfo>()
+          .setRenderPass(*render_pass);
+    }
 
     graphics_pipeline = vk::raii::Pipeline(
         device, nullptr,
@@ -713,6 +901,7 @@ private:
 
   void create_depth_resources() {
     auto depth_format = find_depth_format();
+
     std::tie(depth_image, depth_image_memory) =
         create_image(swap_chain_extent.width, swap_chain_extent.height, 1,
                      msaa_samples, depth_format, vk::ImageTiling::eOptimal,
@@ -723,9 +912,8 @@ private:
   }
   // Available formats: eLinear || eOptimal
   vk::Format find_supported_format(const std::vector<vk::Format> &candidates,
-                                 vk::ImageTiling tiling,
-                                 vk::FormatFeatureFlags features)
-  const {
+                                   vk::ImageTiling tiling,
+                                   vk::FormatFeatureFlags features) const {
     for (const auto format : candidates) {
       const auto props = physical_device.getFormatProperties(format);
       if (((tiling == vk::ImageTiling::eLinear) &&
@@ -766,12 +954,11 @@ private:
         create_buffer(image_size, vk::BufferUsageFlagBits::eTransferSrc,
                       vk::MemoryPropertyFlagBits::eHostVisible |
                           vk::MemoryPropertyFlagBits::eHostCoherent);
+
     void *data = staging_buffer_memory.mapMemory(0, image_size);
     memcpy(data, pixels, image_size);
     staging_buffer_memory.unmapMemory();
-    // std::cout << "L'immagine texture.png ha:\n";
-    // std::cout << "\tlarghezza: " << text_widht << ",\n";
-    // std::cout << "\taltezza: " << text_height << ",\n";
+
     stbi_image_free(pixels);
 
     std::tie(texture_image, texture_image_memory) = create_image(
@@ -782,21 +969,16 @@ private:
             vk::ImageUsageFlagBits::eSampled,
         vk::MemoryPropertyFlagBits::eDeviceLocal);
 
-    vk::raii::CommandBuffer command_buffer = begin_single_time_commands();
-    transition_image_layout(command_buffer, texture_image,
-                            vk::ImageLayout::eUndefined,
-                            vk::ImageLayout::eTransferDstOptimal,
-                            vk::ImageAspectFlagBits::eColor, mip_levels);
-    copyBufferToImage(command_buffer, staging_buffer, texture_image,
-                      static_cast<uint32_t>(text_width),
-                      static_cast<uint32_t>(text_height));
-    generate_mipmaps(command_buffer, texture_image, vk::Format::eR8G8B8A8Srgb,
-                     text_width, text_height, mip_levels);
-    end_single_time_commands(std::move(command_buffer));
+    transition_image_layout(texture_image, vk::ImageLayout::eUndefined,
+                            vk::ImageLayout::eTransferDstOptimal, mip_levels);
+    copy_buffer_to_image(staging_buffer, texture_image,
+                         static_cast<uint32_t>(text_width),
+                         static_cast<uint32_t>(text_height));
+    generate_mipmaps(texture_image, vk::Format::eR8G8B8A8Srgb, text_width,
+                     text_height, mip_levels);
   }
 
-  void generate_mipmaps(vk::raii::CommandBuffer &command_buffer,
-                        vk::raii::Image &image, vk::Format image_format,
+  void generate_mipmaps(vk::raii::Image &image, vk::Format image_format,
                         uint32_t text_w, uint32_t text_h, uint32_t mip_levels) {
 
     auto format_properties = physical_device.getFormatProperties(image_format);
@@ -806,6 +988,10 @@ private:
       throw std::runtime_error(
           "texture image format does not support linear blitting!");
     }
+
+    std::unique_ptr<vk::raii::CommandBuffer> command_buffer =
+        begin_single_time_commands();
+
     auto barrier = vk::ImageMemoryBarrier()
                        .setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)
                        .setDstAccessMask(vk::AccessFlagBits::eTransferRead)
@@ -825,56 +1011,60 @@ private:
           .setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)
           .setDstAccessMask(vk::AccessFlagBits::eTransferRead);
 
-      command_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-                                     vk::PipelineStageFlagBits::eTransfer, {},
-                                     {}, {}, barrier);
+      command_buffer->pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+                                      vk::PipelineStageFlagBits::eTransfer, {},
+                                      {}, {}, barrier);
 
-      auto blit =
-          vk::ImageBlit()
-              .setSrcSubresource(
-                  vk::ImageSubresourceLayers()
-                      .setAspectMask(vk::ImageAspectFlagBits::eColor)
-                      .setMipLevel(i - 1)
-                      .setLayerCount(1))
-              .setSrcOffsets(
-                  std::array<vk::Offset3D, 2>({{}, {mip_w, mip_h, 1}}))
-              .setDstSubresource(
-                  vk::ImageSubresourceLayers()
-                      .setAspectMask(vk::ImageAspectFlagBits::eColor)
-                      .setMipLevel(i)
-                      .setLayerCount(1))
-              .setDstOffsets(std::array<vk::Offset3D, 2>(
-                  {{},
-                   {1 < mip_w ? mip_w / 2 : 1, 1 < mip_h ? mip_h / 2 : 1, 1}}));
+      vk::ArrayWrapper1D<vk::Offset3D, 2> offsets, dst_offsets;
+      offsets[0] = vk::Offset3D(0, 0, 0);
+      offsets[1] = vk::Offset3D(mip_w, mip_h, 1);
+      dst_offsets[0] = vk::Offset3D(0, 0, 0);
+      dst_offsets[1] =
+          vk::Offset3D(mip_w > 1 ? mip_w / 2 : 1, mip_h > 1 ? mip_h / 2 : 1, 1);
 
-      command_buffer.blitImage(image, vk::ImageLayout::eTransferSrcOptimal,
-                               image, vk::ImageLayout::eTransferDstOptimal,
-                               blit, vk::Filter::eLinear);
+      auto blit = vk::ImageBlit()
+                      .setSrcSubresource(
+                          vk::ImageSubresourceLayers()
+                              .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                              .setMipLevel(i - 1)
+                              .setLayerCount(1))
+                      .setSrcOffsets(offsets)
+                      .setDstSubresource(
+                          vk::ImageSubresourceLayers()
+                              .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                              .setMipLevel(i)
+                              .setLayerCount(1))
+                      .setDstOffsets(dst_offsets);
+
+      command_buffer->blitImage(image, vk::ImageLayout::eTransferSrcOptimal,
+                                image, vk::ImageLayout::eTransferDstOptimal,
+                                blit, vk::Filter::eLinear);
 
       barrier.setOldLayout(vk::ImageLayout::eTransferSrcOptimal)
           .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
           .setSrcAccessMask(vk::AccessFlagBits::eTransferRead)
           .setDstAccessMask(vk::AccessFlagBits::eShaderRead);
 
-      command_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-                                     vk::PipelineStageFlagBits::eFragmentShader,
-                                     {}, {}, {}, barrier);
+      command_buffer->pipelineBarrier(
+          vk::PipelineStageFlagBits::eTransfer,
+          vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, barrier);
 
       if (1 < mip_w)
         mip_w /= 2;
       if (1 < mip_h)
         mip_h /= 2;
-
-      barrier.subresourceRange.baseMipLevel = mip_levels - 1;
-      barrier.setOldLayout(vk::ImageLayout::eTransferDstOptimal)
-          .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
-          .setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)
-          .setDstAccessMask(vk::AccessFlagBits::eShaderRead);
-
-      command_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-                                     vk::PipelineStageFlagBits::eFragmentShader,
-                                     {}, {}, {}, barrier);
     }
+    barrier.subresourceRange.baseMipLevel = mip_levels - 1;
+    barrier.setOldLayout(vk::ImageLayout::eTransferDstOptimal)
+        .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+        .setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)
+        .setDstAccessMask(vk::AccessFlagBits::eShaderRead);
+
+    command_buffer->pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+                                    vk::PipelineStageFlagBits::eFragmentShader,
+                                    {}, {}, {}, barrier);
+
+    end_single_time_commands(*command_buffer);
   }
 
   vk::SampleCountFlagBits get_max_usable_sample_count() {
@@ -929,8 +1119,7 @@ private:
   vk::raii::ImageView create_image_view(vk::Image const &image,
                                         vk::Format format,
                                         vk::ImageAspectFlagBits aspect_mask,
-                                        uint32_t mip_levels)
-  const {
+                                        uint32_t mip_levels) const {
     auto view_info = vk::ImageViewCreateInfo()
                          .setFormat(format)
                          .setImage(image)
@@ -949,20 +1138,21 @@ private:
   create_image(uint32_t width, uint32_t height, uint32_t mip_levels,
                vk::SampleCountFlagBits num_samples, vk::Format format,
                vk::ImageTiling tiling, vk::ImageUsageFlags usage,
-               vk::MemoryPropertyFlags properties)
-  {
+               vk::MemoryPropertyFlags properties) {
     auto image_info = vk::ImageCreateInfo()
                           .setImageType(vk::ImageType::e2D)
                           .setFormat(format)
                           .setExtent({width, height, 1})
-                          .setArrayLayers(1)
                           .setMipLevels(mip_levels)
+                          .setArrayLayers(1)
                           .setSamples(num_samples)
                           .setTiling(tiling)
                           .setUsage(usage)
-                          .setSharingMode(vk::SharingMode::eExclusive);
+                          .setSharingMode(vk::SharingMode::eExclusive)
+                          .setInitialLayout(vk::ImageLayout::eUndefined);
 
     auto image = vk::raii::Image(device, image_info);
+
     auto mem_req = image.getMemoryRequirements();
     auto alloc_info = vk::MemoryAllocateInfo()
                           .setAllocationSize(mem_req.size)
@@ -974,65 +1164,109 @@ private:
     return {std::move(image), std::move(image_memory)};
   }
 
-  void transition_image_layout(vk::raii::CommandBuffer &command_buffer,
-                               const vk::raii::Image &image,
+  void transition_image_layout(const vk::raii::Image &image,
                                vk::ImageLayout old_layout,
                                vk::ImageLayout new_layout,
-                               vk::ImageAspectFlags image_aspect_mask,
                                uint32_t mip_levels) {
-    auto barrier =
-        vk::ImageMemoryBarrier()
-            .setOldLayout(old_layout)
-            .setImage(image)
-            .setNewLayout(new_layout)
-            .setSrcQueueFamilyIndex(vk::QueueFamilyIgnored)
-            .setDstQueueFamilyIndex(vk::QueueFamilyIgnored)
-            .setSubresourceRange(vk::ImageSubresourceRange()
-                                     .setAspectMask(image_aspect_mask)
-                                     .setLevelCount(mip_levels)
-                                     .setLayerCount(1));
+    const auto command_buffer = begin_single_time_commands();
 
-    vk::PipelineStageFlags source_stage;
-    vk::PipelineStageFlags destination_stage;
+    if (app_info.synchronization2_supported) {
+      auto barrier =
+          vk::ImageMemoryBarrier2()
+              .setSrcStageMask(vk::PipelineStageFlagBits2::eAllCommands)
+              .setDstStageMask(vk::PipelineStageFlagBits2::eAllCommands)
+              .setOldLayout(old_layout)
+              .setNewLayout(new_layout)
+              .setImage(image)
+              .setSubresourceRange(
+                  vk::ImageSubresourceRange()
+                      .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                      .setBaseArrayLayer(0)
+                      .setBaseMipLevel(0)
+                      .setLevelCount(mip_levels)
+                      .setLayerCount(1));
 
-    if (old_layout == vk::ImageLayout::eUndefined &&
-        new_layout == vk::ImageLayout::eTransferDstOptimal) {
-      barrier.setSrcAccessMask({}).setDstAccessMask(
-          vk::AccessFlagBits::eTransferWrite);
+      if (old_layout == vk::ImageLayout::eUndefined &&
+          new_layout == vk::ImageLayout::eTransferDstOptimal) {
+        barrier.setSrcAccessMask(vk::AccessFlagBits2::eNone)
+            .setDstAccessMask(vk::AccessFlagBits2::eTransferWrite)
+            .setSrcStageMask(vk::PipelineStageFlagBits2::eTopOfPipe)
+            .setDstStageMask(vk::PipelineStageFlagBits2::eTransfer);
+      } else if (old_layout == vk::ImageLayout::eTransferDstOptimal &&
+                 new_layout == vk::ImageLayout::eShaderReadOnlyOptimal) {
+        barrier.setSrcAccessMask(vk::AccessFlagBits2::eTransferWrite)
+            .setDstAccessMask(vk::AccessFlagBits2::eShaderRead)
+            .setSrcStageMask(vk::PipelineStageFlagBits2::eTransfer)
+            .setDstStageMask(vk::PipelineStageFlagBits2::eFragmentShader);
+      } else
+        throw std::invalid_argument("unsupported layer transition!");
 
-      source_stage = vk::PipelineStageFlagBits::eTopOfPipe;
-      destination_stage = vk::PipelineStageFlagBits::eTransfer;
-    } else if (old_layout == vk::ImageLayout::eTransferDstOptimal &&
-               new_layout == vk::ImageLayout::eShaderReadOnlyOptimal) {
-      barrier.setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)
-          .setDstAccessMask(vk::AccessFlagBits::eShaderRead);
+      auto dependency_info = vk::DependencyInfo()
+                                 .setImageMemoryBarrierCount(1)
+                                 .setPImageMemoryBarriers(&barrier);
+      command_buffer->pipelineBarrier2(dependency_info);
+    } else {
+      // Use traditional synchronization API
+      auto barrier = vk::ImageMemoryBarrier()
+                         .setOldLayout(old_layout)
+                         .setNewLayout(new_layout)
+                         .setImage(image)
+                         .setSubresourceRange(
+                             vk::ImageSubresourceRange()
+                                 .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                                 .setBaseArrayLayer(0)
+                                 .setBaseMipLevel(0)
+                                 .setLevelCount(mip_levels)
+                                 .setLayerCount(1));
 
-      source_stage = vk::PipelineStageFlagBits::eTransfer;
-      destination_stage = vk::PipelineStageFlagBits::eFragmentShader;
-    } else
-      std::invalid_argument("unsupported layer transition!");
+      vk::PipelineStageFlags source_stage;
+      vk::PipelineStageFlags destination_stage;
 
-    command_buffer.pipelineBarrier(source_stage, destination_stage, {}, {}, {},
-                                   barrier);
+      if (old_layout == vk::ImageLayout::eUndefined &&
+          new_layout == vk::ImageLayout::eTransferDstOptimal) {
+        barrier.setSrcAccessMask({}).setDstAccessMask(
+            vk::AccessFlagBits::eTransferWrite);
+
+        source_stage = vk::PipelineStageFlagBits::eTopOfPipe;
+        destination_stage = vk::PipelineStageFlagBits::eTransfer;
+      } else if (old_layout == vk::ImageLayout::eTransferDstOptimal &&
+                 new_layout == vk::ImageLayout::eShaderReadOnlyOptimal) {
+        barrier.setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)
+            .setDstAccessMask(vk::AccessFlagBits::eShaderRead);
+
+        source_stage = vk::PipelineStageFlagBits::eTransfer;
+        destination_stage = vk::PipelineStageFlagBits::eFragmentShader;
+      } else
+        throw std::invalid_argument("unsupported layer transition!");
+
+      command_buffer->pipelineBarrier(source_stage, destination_stage, {}, {},
+                                      {}, barrier);
+    }
+    end_single_time_commands(*command_buffer);
   }
 
-  void copyBufferToImage(vk::raii::CommandBuffer &command_buffer,
-                         const vk::raii::Buffer &buffer, vk::raii::Image &image,
-                         uint32_t width, uint32_t height) {
+  void copy_buffer_to_image(const vk::raii::Buffer &buffer,
+                            vk::raii::Image &image, uint32_t width,
+                            uint32_t height) {
+
+    std::unique_ptr<vk::raii::CommandBuffer> command_buffer =
+        begin_single_time_commands();
+
     auto region = vk::BufferImageCopy()
-                      .setBufferImageHeight(0)
                       .setBufferOffset(0)
                       .setBufferRowLength(0)
-                      .setImageOffset({0, 0, 0})
-                      .setImageExtent({width, height, 1})
+                      .setBufferImageHeight(0)
                       .setImageSubresource(
                           vk::ImageSubresourceLayers()
                               .setLayerCount(1)
                               .setMipLevel(0)
                               .setAspectMask(vk::ImageAspectFlagBits::eColor)
-                              .setBaseArrayLayer(0));
-    command_buffer.copyBufferToImage(
+                              .setBaseArrayLayer(0))
+                      .setImageOffset({0, 0, 0})
+                      .setImageExtent({width, height, 1});
+    command_buffer->copyBufferToImage(
         buffer, image, vk::ImageLayout::eTransferDstOptimal, region);
+    end_single_time_commands(*command_buffer);
   }
 
   void load_model() {
@@ -1135,45 +1369,63 @@ private:
             .setMemoryTypeIndex(
                 find_memory_type(mem_requirements.memoryTypeBits, properties));
 
-    auto device_memory = vk::raii::DeviceMemory(device, mem_allocate_info);
-    buffer.bindMemory(*device_memory, 0);
+    auto buffer_memory = vk::raii::DeviceMemory(device, mem_allocate_info);
+    buffer.bindMemory(buffer_memory, 0);
 
-    return {std::move(buffer), std::move(device_memory)};
+    return {std::move(buffer), std::move(buffer_memory)};
   }
 
-  vk::raii::CommandBuffer begin_single_time_commands() {
+  std::unique_ptr<vk::raii::CommandBuffer> begin_single_time_commands() {
     auto alloc_info = vk::CommandBufferAllocateInfo()
                           .setCommandPool(command_pool)
                           .setLevel(vk::CommandBufferLevel::ePrimary)
                           .setCommandBufferCount(1);
 
-    auto command_buffer =
-        std::move(vk::raii::CommandBuffers(device, alloc_info).front());
+    auto command_buffer = std::make_unique<vk::raii::CommandBuffer>(
+        std::move(vk::raii::CommandBuffers(device, alloc_info).front()));
     auto begin_info = vk::CommandBufferBeginInfo().setFlags(
         vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
-    command_buffer.begin(begin_info);
+    command_buffer->begin(begin_info);
 
-    return std::move(command_buffer);
+    return command_buffer;
   }
 
-  void end_single_time_commands(vk::raii::CommandBuffer &&command_buffer) {
+  void end_single_time_commands(const vk::raii::CommandBuffer &command_buffer) {
     command_buffer.end();
+
     auto submit_info =
         vk::SubmitInfo().setCommandBufferCount(1).setPCommandBuffers(
             &*command_buffer);
+
     queue.submit(submit_info);
     queue.waitIdle();
   }
 
   void copy_buffer(vk::raii::Buffer &src_buffer, vk::raii::Buffer &dst_buffer,
                    vk::DeviceSize size) {
-    auto command_buffer = begin_single_time_commands();
-    command_buffer.copyBuffer(*src_buffer, *dst_buffer,
-                              vk::BufferCopy().setSize(size));
-    end_single_time_commands(std::move(command_buffer));
+    auto alloc_info = vk::CommandBufferAllocateInfo()
+                          .setCommandPool(command_pool)
+                          .setLevel(vk::CommandBufferLevel::ePrimary)
+                          .setCommandBufferCount(1);
+
+    auto command_copy_buffer =
+        std::move(device.allocateCommandBuffers(alloc_info).front());
+    command_copy_buffer.begin(vk::CommandBufferBeginInfo().setFlags(
+        vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
+    command_copy_buffer.copyBuffer(*src_buffer, *dst_buffer,
+                                   vk::BufferCopy().setSize(size));
+    command_copy_buffer.end();
+    queue.submit(vk::SubmitInfo().setCommandBufferCount(1).setPCommandBuffers(
+                     &*command_copy_buffer),
+                 nullptr);
+    queue.waitIdle();
   }
 
   void create_uniform_buffers() {
+    uniform_buffers.clear();
+    uniform_buffers_memory.clear();
+    uniform_buffers_mapped.clear();
+
     for (int size = 0; size < MAX_FRAMES_IN_FLIGHT; size++) {
       vk::DeviceSize buffer_size = sizeof(UniformBufferObject);
       auto [buffer, buffer_memory] =
@@ -1187,7 +1439,7 @@ private:
     }
   }
 
-  void create_description_pool() {
+  void create_descriptor_pool() {
     std::array<vk::DescriptorPoolSize, 2> pool_size{
         vk::DescriptorPoolSize()
             .setType(vk::DescriptorType::eUniformBuffer)
@@ -1207,13 +1459,14 @@ private:
 
   void create_descriptor_sets() {
     std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT,
-                                                 *descriptor_set_layout);
+                                                 descriptor_set_layout);
     auto alloc_info =
         vk::DescriptorSetAllocateInfo()
             .setDescriptorPool(descriptor_pool)
             .setDescriptorSetCount(static_cast<uint32_t>(layouts.size()))
             .setPSetLayouts(layouts.data());
 
+    descriptor_sets.clear();
     descriptor_sets = device.allocateDescriptorSets(alloc_info);
 
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
@@ -1248,11 +1501,9 @@ private:
   }
 
   uint32_t find_memory_type(uint32_t type_filter,
-                            vk::MemoryPropertyFlags properties)
-  {
+                            vk::MemoryPropertyFlags properties) {
     auto mem_properties = physical_device.getMemoryProperties();
-    for (uint32_t i = 0; i < mem_properties.memoryTypeCount; i++)
-    {
+    for (uint32_t i = 0; i < mem_properties.memoryTypeCount; i++) {
       if ((type_filter & (1 << i)) &&
           (mem_properties.memoryTypes[i].propertyFlags & properties) ==
               properties) {
@@ -1263,6 +1514,7 @@ private:
   }
 
   void create_command_buffers() {
+    command_buffers.clear();
     auto alloc_info = vk::CommandBufferAllocateInfo()
                           .setCommandPool(command_pool)
                           .setLevel(vk::CommandBufferLevel::ePrimary)
@@ -1274,146 +1526,300 @@ private:
     auto &command_buffer = command_buffers[frame_index];
     command_buffer.begin({});
 
-    transition_image_layour(swap_chain_images[image_index],
-                            vk::ImageLayout::eUndefined,
-                            vk::ImageLayout::eColorAttachmentOptimal, {},
-                            vk::AccessFlagBits2::eColorAttachmentWrite,
-                            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-                            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-                            vk::ImageAspectFlagBits::eColor);
-
-    transition_image_layour(*depth_image, vk::ImageLayout::eUndefined,
-                            vk::ImageLayout::eDepthAttachmentOptimal,
-                            vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-                            vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-                            vk::PipelineStageFlagBits2::eEarlyFragmentTests |
-                                vk::PipelineStageFlagBits2::eLateFragmentTests,
-                            vk::PipelineStageFlagBits2::eEarlyFragmentTests |
-                                vk::PipelineStageFlagBits2::eLateFragmentTests,
-                            vk::ImageAspectFlagBits::eDepth);
-
-    transition_image_layour(*color_image, vk::ImageLayout::eUndefined,
-                            vk::ImageLayout::eColorAttachmentOptimal,
-                            vk::AccessFlagBits2::eColorAttachmentWrite,
-                            vk::AccessFlagBits2::eColorAttachmentWrite,
-                            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-                            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-                            vk::ImageAspectFlagBits::eColor);
-
     auto clear_color = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
     auto clear_depth = vk::ClearDepthStencilValue(1.0f, 0);
-    auto color_attachment_info =
-        vk::RenderingAttachmentInfo()
-            .setImageView(color_image_view)
-            .setImageLayout(vk::ImageLayout::eColorAttachmentOptimal)
-            .setResolveMode(vk::ResolveModeFlagBits::eAverage)
-            .setResolveImageView(swap_chain_image_views[image_index])
-            .setResolveImageLayout(vk::ImageLayout::eColorAttachmentOptimal)
-            .setLoadOp(vk::AttachmentLoadOp::eClear)
-            .setStoreOp(vk::AttachmentStoreOp::eStore)
-            .setClearValue(clear_color);
-    auto depth_attachment_info =
-        vk::RenderingAttachmentInfo()
-            .setImageView(depth_image_view)
-            .setImageLayout(vk::ImageLayout::eDepthAttachmentOptimal)
-            .setLoadOp(vk::AttachmentLoadOp::eClear)
-            .setStoreOp(vk::AttachmentStoreOp::eDontCare)
-            .setClearValue(clear_depth);
 
-    auto rendering_info =
-        vk::RenderingInfo()
-            .setRenderArea(
-                vk::Rect2D().setOffset({0, 0}).setExtent(swap_chain_extent))
-            .setLayerCount(1)
-            .setColorAttachmentCount(1)
-            .setPColorAttachments(&color_attachment_info)
-            .setPDepthAttachment(&depth_attachment_info);
+    std::array<vk::ClearValue, 2> clear_values = {clear_color, clear_depth};
 
-    command_buffer.beginRendering(rendering_info);
+    if (app_info.dynamic_rendering_supported) {
+      if (app_info.synchronization2_supported) {
+        assert(color_image != nullptr);
+        assert(depth_image != nullptr);
+        auto color_barrier =
+            vk::ImageMemoryBarrier2()
+                .setSrcStageMask(
+                    vk::PipelineStageFlagBits2::eColorAttachmentOutput)
+                .setSrcAccessMask(vk::AccessFlagBits2::eColorAttachmentWrite)
+                .setDstStageMask(
+                    vk::PipelineStageFlagBits2::eColorAttachmentOutput)
+                .setDstAccessMask(vk::AccessFlagBits2::eColorAttachmentWrite)
+                .setOldLayout(vk::ImageLayout::eUndefined)
+                .setNewLayout(vk::ImageLayout::eColorAttachmentOptimal)
+                .setImage(*color_image)
+                .setSubresourceRange(
+                    vk::ImageSubresourceRange()
+                        .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                        .setBaseMipLevel(0)
+                        .setLevelCount(1)
+                        .setBaseArrayLayer(0)
+                        .setLayerCount(1));
+
+        auto depth_barrier =
+            vk::ImageMemoryBarrier2()
+                .setSrcStageMask(
+                    vk::PipelineStageFlagBits2::eEarlyFragmentTests |
+                    vk::PipelineStageFlagBits2::eLateFragmentTests)
+                .setSrcAccessMask(
+                    vk::AccessFlagBits2::eDepthStencilAttachmentWrite)
+                .setDstStageMask(
+                    vk::PipelineStageFlagBits2::eEarlyFragmentTests |
+                    vk::PipelineStageFlagBits2::eLateFragmentTests)
+                .setDstAccessMask(
+                    vk::AccessFlagBits2::eDepthStencilAttachmentWrite)
+                .setOldLayout(vk::ImageLayout::eUndefined)
+                .setNewLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal)
+                .setImage(*depth_image)
+                .setSubresourceRange(
+                    vk::ImageSubresourceRange()
+                        .setAspectMask(vk::ImageAspectFlagBits::eDepth)
+                        .setBaseMipLevel(0)
+                        .setLevelCount(1)
+                        .setBaseArrayLayer(0)
+                        .setLayerCount(1));
+
+        auto swapchain_barrier =
+            vk::ImageMemoryBarrier2()
+                .setSrcStageMask(
+                    vk::PipelineStageFlagBits2::eColorAttachmentOutput)
+                .setSrcAccessMask(vk::AccessFlagBits2::eNone)
+                .setDstStageMask(
+                    vk::PipelineStageFlagBits2::eColorAttachmentOutput)
+                .setDstAccessMask(vk::AccessFlagBits2::eColorAttachmentWrite)
+                .setOldLayout(vk::ImageLayout::eUndefined)
+                .setNewLayout(vk::ImageLayout::eColorAttachmentOptimal)
+                .setImage(swap_chain_images[image_index])
+                .setSubresourceRange(
+                    vk::ImageSubresourceRange()
+                        .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                        .setBaseMipLevel(0)
+                        .setLevelCount(1)
+                        .setBaseArrayLayer(0)
+                        .setLayerCount(1));
+        std::array<vk::ImageMemoryBarrier2, 3> barriers = {
+            color_barrier, depth_barrier, swapchain_barrier};
+        auto dependency_info = vk::DependencyInfo()
+                                   .setImageMemoryBarrierCount(
+                                       static_cast<uint32_t>(barriers.size()))
+                                   .setPImageMemoryBarriers(barriers.data());
+        command_buffer.pipelineBarrier2(dependency_info);
+      } else {
+        auto color_barrier =
+            vk::ImageMemoryBarrier()
+                .setSrcAccessMask(vk::AccessFlagBits::eNone)
+                .setDstAccessMask(vk::AccessFlagBits::eColorAttachmentWrite)
+                .setOldLayout(vk::ImageLayout::eUndefined)
+                .setNewLayout(vk::ImageLayout::eColorAttachmentOptimal)
+                .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .setImage(*color_image)
+                .setSubresourceRange(
+                    vk::ImageSubresourceRange()
+                        .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                        .setBaseArrayLayer(0)
+                        .setBaseMipLevel(0)
+                        .setLayerCount(1)
+                        .setLevelCount(1));
+
+        auto depth_barrier =
+            vk::ImageMemoryBarrier()
+                .setSrcAccessMask(vk::AccessFlagBits::eNone)
+                .setDstAccessMask(
+                    vk::AccessFlagBits::eDepthStencilAttachmentWrite)
+                .setOldLayout(vk::ImageLayout::eUndefined)
+                .setNewLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal)
+                .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .setImage(*depth_image)
+                .setSubresourceRange(
+                    vk::ImageSubresourceRange()
+                        .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                        .setBaseArrayLayer(0)
+                        .setBaseMipLevel(0)
+                        .setLayerCount(1)
+                        .setLevelCount(1));
+
+        auto swapchain_barrier =
+            vk::ImageMemoryBarrier()
+                .setSrcAccessMask(vk::AccessFlagBits::eNone)
+                .setDstAccessMask(vk::AccessFlagBits::eColorAttachmentWrite)
+                .setOldLayout(vk::ImageLayout::eUndefined)
+                .setNewLayout(vk::ImageLayout::eColorAttachmentOptimal)
+                .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .setImage(swap_chain_images[image_index])
+                .setSubresourceRange(
+                    vk::ImageSubresourceRange()
+                        .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                        .setBaseArrayLayer(0)
+                        .setBaseMipLevel(0)
+                        .setLayerCount(1)
+                        .setLevelCount(1));
+
+        std::array<vk::ImageMemoryBarrier, 3> barriers = {
+            color_barrier, depth_barrier, swapchain_barrier};
+
+        command_buffer.pipelineBarrier(
+            vk::PipelineStageFlagBits::eTopOfPipe,
+            vk::PipelineStageFlagBits::eColorAttachmentOutput |
+                vk::PipelineStageFlagBits::eEarlyFragmentTests,
+            vk::DependencyFlagBits::eByRegion, {}, {}, barriers);
+      }
+
+      // Setup rendering attachments
+      auto color_attachment_info =
+          vk::RenderingAttachmentInfo()
+              .setImageView(*color_image_view)
+              .setImageLayout(vk::ImageLayout::eColorAttachmentOptimal)
+              .setResolveMode(vk::ResolveModeFlagBits::eAverage)
+              .setResolveImageView(*swap_chain_image_views[image_index])
+              .setResolveImageLayout(vk::ImageLayout::eColorAttachmentOptimal)
+              .setLoadOp(vk::AttachmentLoadOp::eClear)
+              .setStoreOp(vk::AttachmentStoreOp::eStore)
+              .setClearValue(clear_color);
+      auto depth_attachment_info =
+          vk::RenderingAttachmentInfo()
+              .setImageView(*depth_image_view)
+              .setImageLayout(vk::ImageLayout::eDepthAttachmentOptimal)
+              .setLoadOp(vk::AttachmentLoadOp::eClear)
+              .setStoreOp(vk::AttachmentStoreOp::eDontCare)
+              .setClearValue(clear_depth);
+
+      auto rendering_info =
+          vk::RenderingInfo()
+              .setRenderArea(
+                  vk::Rect2D().setOffset({0, 0}).setExtent(swap_chain_extent))
+              .setLayerCount(1)
+              .setColorAttachmentCount(1)
+              .setPColorAttachments(&color_attachment_info)
+              .setPDepthAttachment(&depth_attachment_info);
+
+      command_buffer.beginRendering(rendering_info);
+    } else {
+      std::cout << "Recording command buffer with traditional render pass\n";
+
+      auto render_pass_info =
+          vk::RenderPassBeginInfo()
+              .setRenderPass(*render_pass)
+              .setFramebuffer(*swap_chain_frame_buffers[image_index])
+              .setRenderArea(
+                  vk::Rect2D().setOffset({0, 0}).setExtent(swap_chain_extent))
+              .setClearValueCount(static_cast<uint32_t>(clear_values.size()))
+              .setPClearValues(clear_values.data());
+
+      command_buffer.beginRenderPass(render_pass_info,
+                                     vk::SubpassContents::eInline);
+    }
+
     command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics,
                                 *graphics_pipeline);
-    command_buffer.bindVertexBuffers(0, *vertex_buffer, {0});
-    command_buffer.bindIndexBuffer(
-        *index_buffer, 0,
-        vk::IndexTypeValue<decltype(indices)::value_type>::value);
     command_buffer.setViewport(
         0,
         vk::Viewport(0.0f, 0.0f, static_cast<float>(swap_chain_extent.width),
                      static_cast<float>(swap_chain_extent.height), 0.0f, 1.0f));
     command_buffer.setScissor(
         0, vk::Rect2D(vk::Offset2D(0, 0), swap_chain_extent));
+    command_buffer.bindVertexBuffers(0, *vertex_buffer, {0});
+    command_buffer.bindIndexBuffer(*index_buffer, 0, vk::IndexType::eUint32);
     command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                       pipeline_layout, 0,
                                       *descriptor_sets[frame_index], nullptr);
-    command_buffer.drawIndexed(static_cast<uint32_t>(indices.size()), 1, 0, 0,
-                               0);
-    command_buffer.endRendering();
+    command_buffer.drawIndexed(indices.size(), 1, 0, 0, 0);
 
-    transition_image_layour(swap_chain_images[image_index],
-                            vk::ImageLayout::eColorAttachmentOptimal,
-                            vk::ImageLayout::ePresentSrcKHR,
-                            vk::AccessFlagBits2::eColorAttachmentWrite, {},
-                            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-                            vk::PipelineStageFlagBits2::eBottomOfPipe,
-                            vk::ImageAspectFlagBits::eColor);
+    if (app_info.dynamic_rendering_supported) {
+      command_buffer.endRendering();
+
+      if (app_info.synchronization2_supported) {
+        auto barrier =
+            vk::ImageMemoryBarrier2()
+                .setSrcStageMask(
+                    vk::PipelineStageFlagBits2::eColorAttachmentOutput)
+                .setSrcAccessMask(vk::AccessFlagBits2::eColorAttachmentWrite)
+                .setDstStageMask(vk::PipelineStageFlagBits2::eBottomOfPipe)
+                .setDstAccessMask(vk::AccessFlagBits2::eNone)
+                .setOldLayout(vk::ImageLayout::eColorAttachmentOptimal)
+                .setNewLayout(vk::ImageLayout::ePresentSrcKHR)
+                .setImage(swap_chain_images[image_index])
+                .setSubresourceRange(
+                    vk::ImageSubresourceRange()
+                        .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                        .setBaseArrayLayer(0)
+                        .setBaseMipLevel(0)
+                        .setLayerCount(1)
+                        .setLevelCount(1));
+
+        auto dependency_info = vk::DependencyInfo()
+                                   .setImageMemoryBarrierCount(1)
+                                   .setPImageMemoryBarriers(&barrier);
+        command_buffer.pipelineBarrier2(dependency_info);
+      } else {
+        auto barrier =
+            vk::ImageMemoryBarrier()
+                .setSrcAccessMask(vk::AccessFlagBits::eColorAttachmentWrite)
+                .setDstAccessMask(vk::AccessFlagBits::eNone)
+                .setOldLayout(vk::ImageLayout::eColorAttachmentOptimal)
+                .setNewLayout(vk::ImageLayout::ePresentSrcKHR)
+                .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .setImage(swap_chain_images[image_index])
+                .setSubresourceRange(
+                    vk::ImageSubresourceRange()
+                        .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                        .setBaseArrayLayer(0)
+                        .setBaseMipLevel(0)
+                        .setLayerCount(1)
+                        .setLevelCount(1));
+
+        command_buffer.pipelineBarrier(
+            vk::PipelineStageFlagBits::eColorAttachmentOutput,
+            vk::PipelineStageFlagBits::eBottomOfPipe,
+            vk::DependencyFlagBits::eByRegion, {}, {}, {barrier});
+      }
+    } else {
+      command_buffer.endRenderPass();
+    }
 
     command_buffer.end();
-  }
-
-  void transition_image_layour(vk::Image image, vk::ImageLayout old_layout,
-                               vk::ImageLayout new_layout,
-                               vk::AccessFlags2 src_access_mask,
-                               vk::AccessFlags2 dst_access_mask,
-                               vk::PipelineStageFlags2 src_stage_mask,
-                               vk::PipelineStageFlags2 dst_stage_mask,
-                               vk::ImageAspectFlags image_aspect_flags) {
-    auto barrier =
-        vk::ImageMemoryBarrier2()
-            .setSrcStageMask(src_stage_mask)
-            .setSrcAccessMask(src_access_mask)
-            .setDstStageMask(dst_stage_mask)
-            .setDstAccessMask(dst_access_mask)
-            .setOldLayout(old_layout)
-            .setNewLayout(new_layout)
-            .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-            .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-            .setImage(image)
-            .setSubresourceRange(vk::ImageSubresourceRange()
-                                     .setAspectMask(image_aspect_flags)
-                                     .setBaseMipLevel(0)
-                                     .setLevelCount(1)
-                                     .setBaseArrayLayer(0)
-                                     .setLayerCount(1));
-
-    auto dependency_info = vk::DependencyInfo()
-                               .setDependencyFlags({})
-                               .setImageMemoryBarrierCount(1)
-                               .setPImageMemoryBarriers(&barrier);
-
-    command_buffers[frame_index].pipelineBarrier2(dependency_info);
   }
 
   void create_sync_objects() {
     assert(present_complete_semaphores.empty() &&
            render_finished_semaphores.empty() && in_flight_fences.empty());
+
+    if (app_info.timeline_sempaphore_supported) {
+      std::cout << "Creating timeline semaphores\n";
+      auto timeline_create_info =
+          vk::SemaphoreTypeCreateInfo()
+              .setSemaphoreType(vk::SemaphoreType::eTimeline)
+              .setInitialValue(0);
+
+      auto semaphore_info =
+          vk::SemaphoreCreateInfo().setPNext(&timeline_create_info);
+
+      time_line_semaphore = vk::raii::Semaphore(device, semaphore_info);
+    }
+
+    for (size_t i = 0; i < swap_chain_images.size(); i++) {
+      render_finished_semaphores.emplace_back(device,
+                                              vk::SemaphoreCreateInfo());
+    }
+
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
       present_complete_semaphores.emplace_back(device,
                                                vk::SemaphoreCreateInfo());
-      render_finished_semaphores.emplace_back(device,
-                                              vk::SemaphoreCreateInfo());
       in_flight_fences.emplace_back(
           device,
           vk::FenceCreateInfo().setFlags(vk::FenceCreateFlagBits::eSignaled));
     }
   }
 
-  void update_uniform_buffer(uint32_t current_image) {
-    static auto start_time = std::chrono::high_resolution_clock().now();
+  void update_uniform_buffer(uint32_t current_image) const {
+    static auto start_time = std::chrono::high_resolution_clock::now();
 
-    auto current_time = std::chrono::high_resolution_clock().now();
-    float time = std::chrono::duration<float, std::chrono::seconds::period>(
-                     current_time - start_time)
-                     .count();
+    auto current_time = std::chrono::high_resolution_clock::now();
+    float time =
+        std::chrono::duration<float>(current_time - start_time).count();
+
+    std::cout << time;
 
     UniformBufferObject ubo{};
     ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f),
@@ -1427,11 +1833,13 @@ private:
                              static_cast<float>(swap_chain_extent.height),
                          0.1f, 10.0f);
     ubo.proj[1][1] *= -1;
-
     memcpy(uniform_buffers_mapped[current_image], &ubo, sizeof(ubo));
   }
 
   void draw_frame() {
+    // Note: inFlightFences, presentCompleteSemaphores, and commandBuffers are
+    // indexed by frameIndex,
+    // while renderFinishedSemaphores is indexed by imageIndex
     auto fence_result = device.waitForFences(*in_flight_fences[frame_index],
                                              vk::True, UINT64_MAX);
     if (fence_result != vk::Result::eSuccess)
@@ -1440,50 +1848,80 @@ private:
     auto [result, image_index] = swap_chain.acquireNextImage(
         UINT64_MAX, *present_complete_semaphores[frame_index], nullptr);
 
+    // Due to VULKAN_HPP_HANDLE_ERROR_OUT_OF_DATE_AS_SUCCESS being defined,
+    // eErrorOutOfDateKHR can be checked as a result here and does not need to
+    // be caught by an exception.
     if (result == vk::Result::eErrorOutOfDateKHR) {
       recreate_swap_chain();
       return;
     }
+    // On other success codes than eSuccess and eSuboptimalKHR we just throw an
+    // exception. On any error code, aquireNextImage already threw an exception.
     if (result != vk::Result::eSuccess &&
         result != vk::Result::eSuboptimalKHR) {
       assert(result == vk::Result::eTimeout || result == vk::Result::eNotReady);
       throw std::runtime_error("failed to acquire swap chain image");
     }
+    update_uniform_buffer(frame_index);
+    // Only reset the fence if we are submitting work
     device.resetFences(*in_flight_fences[frame_index]);
 
     command_buffers[frame_index].reset();
     record_command_buffer(image_index);
 
-    vk::PipelineStageFlags wait_destination_stage_mask(
-        vk::PipelineStageFlagBits::eColorAttachmentOutput);
+    if (app_info.timeline_sempaphore_supported) {
+      uint64_t wait_value = time_line_value;
+      uint64_t signal_value = ++time_line_value;
 
-    update_uniform_buffer(frame_index);
+      auto timeline_info = vk::TimelineSemaphoreSubmitInfo()
+                               .setWaitSemaphoreValueCount(0)
+                               .setSignalSemaphoreValueCount(1)
+                               .setPSignalSemaphoreValues(&signal_value);
 
-    const auto submit_info =
-        vk::SubmitInfo()
-            .setWaitSemaphoreCount(1)
-            .setPWaitSemaphores(&*present_complete_semaphores[frame_index])
-            .setPWaitDstStageMask(&wait_destination_stage_mask)
-            .setCommandBufferCount(1)
-            .setPCommandBuffers(&*command_buffers[frame_index])
-            .setSignalSemaphoreCount(1)
-            .setPSignalSemaphores(&*render_finished_semaphores[frame_index]);
+      std::array<vk::Semaphore, 2> wait_semaphores = {
+          *present_complete_semaphores[frame_index], *time_line_semaphore};
+      std::array<vk::PipelineStageFlags, 2> wait_stages = {
+          vk::PipelineStageFlagBits::eColorAttachmentOutput,
+          vk::PipelineStageFlagBits::eVertexInput};
+      std::array<uint64_t, 2> wait_values = {0, wait_value};
 
-    queue.submit(submit_info, *in_flight_fences[frame_index]);
+          std::array<vk::Semaphore, 2> signal_semaphores = {
+            *render_finished_semaphores[frame_index], *time_line_semaphore};
+      std::array<uint64_t, 2> signal_values = {0, signal_value};
 
-    /* This is a Subpass Dependency. It is optional and not reproduces in the
-  demo code auto dependency = vk::SubpassDependency()
-            .setSrcSubpass(vk::SubpassExternal)
-            .setDstSubpass(0)
-            .setSrcStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput)
-            .setDstStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput)
-            .setSrcAccessMask(vk::AccessFlagBits::eNone)
-            .setDstAccessMask(vk::AccessFlagBits::eColorAttachmentWrite);
+      timeline_info.setWaitSemaphoreValueCount(2)
+          .setPWaitSemaphoreValues(wait_values.data())
+          .setSignalSemaphoreValueCount(2)
+          .setPSignalSemaphoreValues(signal_values.data());
 
-  vk::RenderPassInfo render_pass_info; //Add in the members of class
-  render_pass_info.dependencyCount = 1;
-  render_pass_info.pDependencies = &dependency;
-  */
+      auto submit_info = vk::SubmitInfo()
+                             .setPNext(&timeline_info)
+                             .setWaitSemaphoreCount(2)
+                             .setPWaitSemaphores(wait_semaphores.data())
+                             .setPWaitDstStageMask(wait_stages.data())
+                             .setCommandBufferCount(1)
+                             .setPCommandBuffers(&*command_buffers[frame_index])
+                             .setSignalSemaphoreCount(2)
+                             .setPSignalSemaphores(signal_semaphores.data());
+
+      queue.submit(submit_info, *in_flight_fences[frame_index]);
+      std::cout << "Prima fase\n";
+    } else {
+      vk::PipelineStageFlags wait_destination_stage_mask(
+          vk::PipelineStageFlagBits::eColorAttachmentOutput);
+
+      const auto submit_info =
+          vk::SubmitInfo()
+              .setWaitSemaphoreCount(1)
+              .setPWaitSemaphores(&*present_complete_semaphores[frame_index])
+              .setPWaitDstStageMask(&wait_destination_stage_mask)
+              .setCommandBufferCount(1)
+              .setPCommandBuffers(&*command_buffers[frame_index])
+              .setSignalSemaphoreCount(1)
+              .setPSignalSemaphores(&*render_finished_semaphores[frame_index]);
+
+      queue.submit(submit_info, *in_flight_fences[frame_index]);
+    }
 
     const auto present_info_khr =
         vk::PresentInfoKHR()
@@ -1491,13 +1929,12 @@ private:
             .setPWaitSemaphores(&*render_finished_semaphores[frame_index])
             .setSwapchainCount(1)
             .setPSwapchains(&*swap_chain)
-            .setPImageIndices(&image_index)
-            .setPResults(nullptr);
+            .setPImageIndices(&image_index);
 
     result = queue.presentKHR(present_info_khr);
 
     if ((result == vk::Result::eSuboptimalKHR) ||
-        (result == vk::Result::eErrorOutOfDateKHR)) {
+        (result == vk::Result::eErrorOutOfDateKHR) || framebuffer_resized) {
       framebuffer_resized = false;
       recreate_swap_chain();
     } else {
@@ -1518,7 +1955,7 @@ private:
     return shader_module;
   }
 
-  uint32_t choose_swap_min_image_count(
+  static uint32_t choose_swap_min_image_count(
       vk::SurfaceCapabilitiesKHR const &surface_capabilities) {
     auto min_image_count = std::max(3u, surface_capabilities.minImageCount);
     if ((0 < surface_capabilities.maxImageCount) &&
@@ -1527,7 +1964,7 @@ private:
     return min_image_count;
   }
 
-  vk::SurfaceFormatKHR choose_swap_surface_format(
+  static vk::SurfaceFormatKHR choose_swap_surface_format(
       const std::vector<vk::SurfaceFormatKHR> &available_formats) {
     const auto format_it = std::find_if(
         available_formats.begin(), available_formats.end(),
@@ -1539,7 +1976,7 @@ private:
                                                 : available_formats[0];
   }
 
-  vk::PresentModeKHR choose_swap_present_mode(
+  static vk::PresentModeKHR choose_swap_present_mode(
       std::vector<vk::PresentModeKHR> const &available_present_mode) {
     assert(std::any_of(available_present_mode.begin(),
                        available_present_mode.end(),
@@ -1572,14 +2009,28 @@ private:
     };
   }
 
-  const std::vector<const char *> get_required_instance_extensions() {
+  const std::vector<const char *> get_required_instance_extensions() const {
     uint32_t glfw_ext_count = 0;
     auto glfw_exts = glfwGetRequiredInstanceExtensions(&glfw_ext_count);
 
     std::vector extensions(glfw_exts, glfw_exts + glfw_ext_count);
-    if (enable_validation_layers) {
+
+    // Check if the debug utils extesion is available
+    std::vector<vk::ExtensionProperties> props =
+        context.enumerateInstanceExtensionProperties();
+    bool debug_utils_available = std::any_of(
+        props.begin(), props.end(), [](vk::ExtensionProperties const &ep) {
+          return strcmp(ep.extensionName, vk::EXTDebugUtilsExtensionName) == 0;
+        });
+
+    // Always include the debug utils extension if available
+    // This allows validation layer to be enabled via vulkanconfig
+    if (debug_utils_available)
       extensions.push_back(vk::EXTDebugUtilsExtensionName);
-    }
+    else
+      std::cout << "VK_EXT_debug_utils extension not available. Validation "
+                   "layers may not work."
+                << std::endl;
 
     return extensions;
   }
@@ -1589,8 +2040,12 @@ private:
                  vk::DebugUtilsMessageTypeFlagsEXT type,
                  const vk::DebugUtilsMessengerCallbackDataEXT *pCall_back_data,
                  void *pUser_data) {
-    std::cerr << "validation layer: type " << vk::to_string(type)
-              << " msg: " << pCall_back_data->pMessage << std::endl;
+    if (severity == vk::DebugUtilsMessageSeverityFlagBitsEXT::eError ||
+        severity == vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning) {
+      std::cerr << "validation layer: type " << to_string(type)
+                << " msg: " << pCall_back_data->pMessage << std::endl;
+    }
+
     return vk::False;
   }
 
